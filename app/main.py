@@ -63,7 +63,7 @@ def run_pipeline_loop(engine: SutraVisionEngine, max_frames: int = 0, headless: 
                         break
                     elif key == ord('a'):  # Operator acknowledgement hotkey
                         engine.protocol_engine.acknowledge_deviation()
-                except cv2.error:
+                except (cv2.error, Exception):
                     pass
 
             if max_frames > 0 and processed >= max_frames:
@@ -104,6 +104,10 @@ def main():
                         help="Number of frames to process before stopping (0 = infinite)")
     parser.add_argument("--publish", action="store_true",
                         help="Enable HTTP telemetry publisher to mock receiver")
+    parser.add_argument("--web", action="store_true",
+                        help="Launch interactive browser-based real-time video HUD (http://127.0.0.1:8000)")
+    parser.add_argument("--port", type=int, default=8000,
+                        help="Port for browser web HUD (default: 8000)")
     args = parser.parse_args()
 
     config = get_config()
@@ -119,11 +123,25 @@ def main():
         run_benchmark()
         return
 
+    # Web HUD Mode: opens real-time browser stream at http://127.0.0.1:8000
+    if args.web:
+        from app.web_viewer import start_web_server
+        engine = SutraVisionEngine(config)
+        if args.mode == "synthetic":
+            from scripts.generate_synthetic_video import create_synthetic_frame_generator
+            engine.ingestor.source = create_synthetic_frame_generator(simulate_deviation=False)
+            engine.ingestor._source_type = "synthetic"
+        elif args.mode == "test-deviation":
+            from scripts.generate_synthetic_video import create_synthetic_frame_generator
+            engine.ingestor.source = create_synthetic_frame_generator(simulate_deviation=True)
+            engine.ingestor._source_type = "synthetic"
+        start_web_server(engine, host="127.0.0.1", port=args.port)
+        return
+
     if args.mode == "synthetic":
         from scripts.generate_synthetic_video import create_synthetic_frame_generator
         gen = create_synthetic_frame_generator(simulate_deviation=False)
         engine = SutraVisionEngine(config)
-        # Swap source to synthetic generator callable
         engine.ingestor.source = gen
         engine.ingestor._source_type = "synthetic"
         run_pipeline_loop(engine, max_frames=args.frames or 180, headless=args.headless)
