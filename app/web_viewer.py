@@ -2,9 +2,9 @@
 Real-Time Browser-Based Live Video HUD for SUTRA Vision Engine.
 Includes:
 - HTML5 Canvas high-performance real-time video stream (30 FPS)
+- Autonomous Flight Copilot Engine (Zero typing - automatically observes, guides & speaks)
 - Mobile IP Webcam & USB Webcam runtime switching
-- Groq LLM Flight Assistant ("Kya ho raha hai? / Kya missing hai?")
-- Voice Alerts (Speech Synthesis) for step updates & deviation warnings
+- Hands-Free Voice Directives (Speech Synthesis) for step updates & deviation warnings
 - Light / Dark Theme toggle & Snapshot capture
 """
 
@@ -19,7 +19,7 @@ from typing import Optional
 import cv2
 import numpy as np
 from fastapi import FastAPI, Response, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse
 import uvicorn
 
 # Ensure project root is in sys.path
@@ -27,15 +27,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import SutraConfig, get_config
 from app.engine import SutraVisionEngine
-from modules.assistant.groq_assistant import SutraExperimentAssistant
+from modules.assistant.copilot_engine import AutonomousCopilotEngine, CopilotDirective
 
 logger = logging.getLogger("sutra.web_viewer")
 
-app = FastAPI(title="SUTRA Real-Time Experiment Guardian HUD")
+app = FastAPI(title="SUTRA Autonomous BAS Experiment Guardian HUD")
 
 engine_instance: Optional[SutraVisionEngine] = None
 latest_annotated_jpeg: Optional[bytes] = None
-assistant_instance = SutraExperimentAssistant()
+copilot_engine = AutonomousCopilotEngine()
+latest_directive: Optional[CopilotDirective] = None
 
 
 HTML_DASHBOARD = """
@@ -43,7 +44,8 @@ HTML_DASHBOARD = """
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>SUTRA AI - On-Board BAS Experiment Guardian</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SUTRA AI - Autonomous BAS Experiment Guardian</title>
   <style>
     :root {
       --bg: #f8fafc;
@@ -52,9 +54,13 @@ HTML_DASHBOARD = """
       --text: #0f172a;
       --text-muted: #64748b;
       --primary: #2563eb;
+      --primary-light: #eff6ff;
       --success: #10b981;
+      --success-light: #ecfdf5;
       --danger: #ef4444;
+      --danger-light: #fef2f2;
       --warning: #f59e0b;
+      --warning-light: #fffbeb;
       --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
     }
     body.dark {
@@ -64,9 +70,13 @@ HTML_DASHBOARD = """
       --text: #f8fafc;
       --text-muted: #94a3b8;
       --primary: #38bdf8;
+      --primary-light: #082f49;
       --success: #34d399;
+      --success-light: #064e3b;
       --danger: #f87171;
+      --danger-light: #450a0a;
       --warning: #fbbf24;
+      --warning-light: #451a03;
       --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -149,6 +159,15 @@ HTML_DASHBOARD = """
       padding: 6px 12px;
       font-size: 12px;
       border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--card-bg);
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s ease;
+    }
+    .source-btn:hover {
+      background: var(--border);
     }
     .source-btn.active {
       background: var(--primary);
@@ -162,7 +181,7 @@ HTML_DASHBOARD = """
       padding: 6px 10px;
       border-radius: 6px;
       font-size: 12px;
-      width: 240px;
+      width: 250px;
     }
 
     .container {
@@ -173,7 +192,7 @@ HTML_DASHBOARD = """
     @media (max-width: 1000px) {
       .container { grid-template-columns: 1fr; }
     }
-    .video-card, .sidebar-card, .assistant-card {
+    .video-card, .sidebar-card, .copilot-card {
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -235,6 +254,65 @@ HTML_DASHBOARD = """
       color: white;
       border-color: #8b5cf6;
     }
+
+    /* Autonomous Copilot Section */
+    .copilot-card {
+      margin-top: 16px;
+      border-left: 5px solid var(--primary);
+    }
+    .copilot-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+    }
+    .copilot-status-pill {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 12px;
+      background: var(--primary-light);
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .directive-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .directive-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+    .directive-text {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.4;
+    }
+    .directive-alert {
+      background: var(--danger-light);
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+    .directive-alert .directive-title {
+      color: var(--danger);
+    }
+    .directive-alert .directive-text {
+      color: var(--danger);
+    }
+
+    /* Diagnostics & Events */
     .metric-row {
       display: flex;
       justify-content: space-between;
@@ -251,7 +329,7 @@ HTML_DASHBOARD = """
       font-size: 13px;
     }
     .event-log {
-      max-height: 220px;
+      max-height: 240px;
       overflow-y: auto;
       font-size: 12px;
       display: flex;
@@ -269,11 +347,11 @@ HTML_DASHBOARD = """
     }
     .event-item.DEVIATION_DETECTED {
       border-left-color: var(--danger);
-      background: rgba(239, 68, 68, 0.08);
+      background: var(--danger-light);
     }
     .event-item.STEP_COMPLETED {
       border-left-color: var(--success);
-      background: rgba(16, 185, 129, 0.08);
+      background: var(--success-light);
     }
     .card-heading {
       font-size: 14px;
@@ -284,55 +362,6 @@ HTML_DASHBOARD = """
       display: flex;
       justify-content: space-between;
       align-items: center;
-    }
-    
-    /* Assistant Chat Styling */
-    .assistant-card {
-      margin-top: 16px;
-    }
-    .chat-output {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
-      min-height: 80px;
-      max-height: 160px;
-      overflow-y: auto;
-      font-size: 13px;
-      line-height: 1.5;
-      margin-bottom: 10px;
-    }
-    .chat-input-row {
-      display: flex;
-      gap: 8px;
-    }
-    .chat-input {
-      flex: 1;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 8px 12px;
-      border-radius: 6px;
-      font-size: 13px;
-    }
-    .quick-chips {
-      display: flex;
-      gap: 6px;
-      margin-top: 8px;
-      flex-wrap: wrap;
-    }
-    .chip {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      padding: 4px 10px;
-      border-radius: 14px;
-      font-size: 11px;
-      cursor: pointer;
-    }
-    .chip:hover {
-      border-color: var(--primary);
-      color: var(--primary);
     }
     
     /* Help Modal */
@@ -350,7 +379,7 @@ HTML_DASHBOARD = """
       color: var(--text);
       padding: 24px;
       border-radius: 12px;
-      max-width: 500px;
+      max-width: 520px;
       width: 90%;
       border: 1px solid var(--border);
       box-shadow: var(--shadow);
@@ -360,16 +389,16 @@ HTML_DASHBOARD = """
 <body>
   <header>
     <div>
-      <div class="brand-title">SUTRA AI - On-Board Experiment Guardian</div>
-      <div class="brand-subtitle">Smart India Hackathon 2026 (SIH26174) &bull; Bharatiya Antariksh Station</div>
+      <div class="brand-title">SUTRA AI - Autonomous BAS Experiment Guardian</div>
+      <div class="brand-subtitle">Smart India Hackathon 2026 (SIH26174) &bull; Bharatiya Antariksh Station (Space Technology)</div>
     </div>
     <div class="header-actions">
-      <button onclick="toggleVoice()" id="voice-btn" class="voice-btn active">&#128266; Voice: ON</button>
+      <button onclick="toggleVoice()" id="voice-btn" class="voice-btn active">&#128266; Hands-Free Voice: ON</button>
       <button onclick="toggleTheme()" id="theme-btn">&#9790; Dark Mode</button>
       <button onclick="openHelpModal()">&#10067; Phone Guide</button>
       <div class="badge" id="status-badge">
         <span class="pulse-dot"></span>
-        <span id="badge-text">EDGE LIVE</span>
+        <span id="badge-text">AUTONOMOUS ACTIVE</span>
       </div>
     </div>
   </header>
@@ -385,36 +414,54 @@ HTML_DASHBOARD = """
   </div>
 
   <div class="container">
-    <!-- Left: Video Stream -->
-    <div class="video-card">
-      <div class="video-container">
-        <canvas id="video-canvas" width="640" height="480"></canvas>
-      </div>
-      <div class="hud-controls">
-        <button onclick="ackDeviation()" class="alert-btn">&#10004; Acknowledge Deviation</button>
-        <button onclick="downloadSnapshot()">&#128247; Snapshot</button>
-        <button onclick="fetchEvents()">&#8635; Refresh</button>
-        <span id="fps-label" style="margin-left: auto; font-size: 13px; font-weight: 600; color: var(--text-muted)">Live Feed: 30 FPS</span>
+    <!-- Left: Video Stream & Autonomous Copilot Guidance -->
+    <div>
+      <div class="video-card">
+        <div class="video-container">
+          <canvas id="video-canvas" width="640" height="480"></canvas>
+        </div>
+        <div class="hud-controls">
+          <button onclick="ackDeviation()" class="alert-btn">&#10004; Acknowledge Deviation</button>
+          <button onclick="downloadSnapshot()">&#128247; Snapshot</button>
+          <button onclick="fetchTelemetry()">&#8635; Refresh Status</button>
+          <span id="fps-label" style="margin-left: auto; font-size: 13px; font-weight: 600; color: var(--text-muted)">Live Feed: 30 FPS</span>
+        </div>
       </div>
 
-      <!-- Groq / Flight Assistant Section -->
-      <div class="assistant-card" style="margin-top: 14px; padding: 14px; background: var(--bg);">
-        <div class="card-heading">
-          <span>&#129302; SUTRA Flight Guidance Assistant (Groq LLM)</span>
-          <button onclick="speakLastReply()" style="padding: 4px 8px; font-size: 11px;">&#128266; Read Aloud</button>
+      <!-- Autonomous Cognitive Copilot Section (No Chatbot - Pure Autonomous Oversight) -->
+      <div class="copilot-card" id="copilot-card">
+        <div class="copilot-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 16px;">&#129302;</span>
+            <strong style="font-size: 14px;">Autonomous Flight Copilot (Groq / Cognitive Engine)</strong>
+          </div>
+          <div class="copilot-status-pill" id="copilot-badge">
+            <span class="pulse-dot" style="background: var(--primary);"></span>
+            AUTONOMOUS GUARDIAN
+          </div>
         </div>
-        <div class="chat-output" id="chat-output">
-          &#128075; <strong>Namaste Astronaut!</strong> Main SUTRA assistant hoon. Camera ke saamne jo bhi ho raha hai, main analyze kar sakta hoon. Poochiye: "Kya ho raha hai?" ya "Kya missing hai?"
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+          <div class="directive-box">
+            <div class="directive-title">Current Perception Observation</div>
+            <div class="directive-text" id="copilot-status">Observing workspace setup and hand posture...</div>
+          </div>
+          <div class="directive-box" id="deviation-box">
+            <div class="directive-title" id="deviation-title">Procedural & Safety Audit</div>
+            <div class="directive-text" id="copilot-missing">Nominal &bull; Sequence matches flight protocol</div>
+          </div>
         </div>
-        <div class="chat-input-row">
-          <input type="text" id="chat-input" class="chat-input" placeholder="Poochiye: Kya missing hai? Ya next kya karna chahiye?..." onkeydown="if(event.key==='Enter') sendChat()">
-          <button onclick="sendChat()" style="background: var(--primary); color: white; border: none;">Poochein</button>
+
+        <div class="directive-box" style="background: var(--primary-light); border-color: var(--primary);">
+          <div class="directive-title" style="color: var(--primary);">Real-Time Mission Directive</div>
+          <div class="directive-text" id="copilot-directive" style="color: var(--primary); font-size: 15px;">
+            Proceed with active assay steps. Video stream continuously analyzed.
+          </div>
         </div>
-        <div class="quick-chips">
-          <span class="chip" onclick="askChip('Kya ho raha hai abhi?')">&#128269; Kya ho raha hai?</span>
-          <span class="chip" onclick="askChip('Koi mistake ya missing step hai kya?')">&#9888; Kya missing hai?</span>
-          <span class="chip" onclick="askChip('Next step kya karna chahiye?')">&#10145; Next kya karna hai?</span>
-          <span class="chip" onclick="askChip('Is experiment step ke rules kya hain?')">&#128220; Rules kya hain?</span>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 12px; color: var(--text-muted);">
+          <span>&#128266; Spoken Voice: <strong id="copilot-spoken-text" style="color: var(--text);">"Standby for automated directive."</strong></span>
+          <button onclick="repeatLastDirective()" style="padding: 4px 10px; font-size: 11px;">&#128260; Repeat Voice</button>
         </div>
       </div>
     </div>
@@ -423,11 +470,11 @@ HTML_DASHBOARD = """
     <div class="sidebar-card">
       <div class="card-heading">
         <span>Real-Time Edge Telemetry</span>
-        <small style="color: var(--text-muted); font-size: 11px;">CPU-First</small>
+        <small style="color: var(--text-muted); font-size: 11px;">CPU-First &bull; &le;120MB</small>
       </div>
       
       <div class="metric-row">
-        <span>Inference Latency:</span>
+        <span>Inference Latency (P95):</span>
         <span class="metric-val" id="p95-val">-- ms</span>
       </div>
       <div class="metric-row">
@@ -435,12 +482,16 @@ HTML_DASHBOARD = """
         <span class="metric-val" id="ram-val">-- MB</span>
       </div>
       <div class="metric-row">
-        <span>Current Protocol Step:</span>
+        <span>Active Protocol Step:</span>
         <span class="metric-val" id="step-val" style="color: var(--primary);">STEP_01</span>
       </div>
       <div class="metric-row">
         <span>Step Description:</span>
         <span id="step-name-val" style="font-size: 12px; font-weight: 600;">Workspace Inspection</span>
+      </div>
+      <div class="metric-row">
+        <span>Observed Action:</span>
+        <span id="active-action-val" style="font-size: 12px; font-weight: 600; color: #10b981;">INSPECTING</span>
       </div>
 
       <div class="card-heading" style="margin-top: 14px;">
@@ -449,7 +500,7 @@ HTML_DASHBOARD = """
       </div>
 
       <div class="event-log" id="event-log">
-        <div class="event-item">Connecting to video feed...</div>
+        <div class="event-item">Initializing SUTRA autonomous pipeline...</div>
       </div>
     </div>
   </div>
@@ -457,16 +508,16 @@ HTML_DASHBOARD = """
   <!-- Mobile IP Webcam Help Modal -->
   <div class="modal-overlay" id="help-modal" onclick="if(event.target===this) closeHelpModal()">
     <div class="modal-content">
-      <h3 style="margin-bottom: 12px; color: var(--primary);">&#128241; Mobile Phone ko Camera Kaise Banayein</h3>
+      <h3 style="margin-bottom: 12px; color: var(--primary);">&#128241; Mobile Phone ko Live Camera Banayein</h3>
       <ol style="padding-left: 20px; line-height: 1.6; font-size: 13px;">
-        <li>Apne Android Phone mein Play Store se <strong>"IP Webcam"</strong> app install karein.</li>
+        <li>Apne Android Phone mein Play Store se <strong>"IP Webcam"</strong> install karein.</li>
         <li>Phone aur Laptop dono ko <strong>same Wi-Fi ya Mobile Hotspot</strong> se connect karein.</li>
-        <li>Phone mein IP Webcam app open karein, neeche scroll karein aur <strong>"Start server"</strong> par tap karein.</li>
-        <li>Phone ki screen par IP dikhegi (jaise: <code>http://192.168.1.15:8080</code>).</li>
-        <li>Upar dashboard ke input box mein <code>/video</code> lagakar likhein: <br><strong style="color: var(--primary);">http://192.168.1.15:8080/video</strong></li>
-        <li><strong>"Connect Mobile"</strong> button dabayein! Live phone camera stream shuru ho jayegi!</li>
+        <li>Phone mein IP Webcam app open karein, scroll karein aur <strong>"Start server"</strong> tap karein.</li>
+        <li>Phone ki screen par IP address dikhega (jaise: <code>http://192.168.1.15:8080</code>).</li>
+        <li>Upar dashboard ke input box mein likhein: <br><strong style="color: var(--primary);">http://192.168.1.15:8080/video</strong></li>
+        <li><strong>"Connect Mobile"</strong> button dabayein! Live phone video stream shuru ho jayegi!</li>
       </ol>
-      <button onclick="closeHelpModal()" style="margin-top: 16px; width: 100%; justify-content: center; background: var(--primary); color: white; border: none;">Samajh Gaya (Close)</button>
+      <button onclick="closeHelpModal()" style="margin-top: 16px; width: 100%; justify-content: center; background: var(--primary); color: white; border: none;">Close Guide</button>
     </div>
   </div>
 
@@ -478,8 +529,8 @@ HTML_DASHBOARD = """
     let frameCount = 0;
     let lastFpsTime = performance.now();
     let voiceEnabled = true;
-    let lastSpokenEventId = null;
-    let lastReplyText = '';
+    let lastSpokenText = '';
+    let lastDirectiveAnnouncement = '';
 
     img.onload = function() {
       if (img.width && img.height) {
@@ -503,7 +554,7 @@ HTML_DASHBOARD = """
       isFetching = false;
     };
 
-    // Continuous smooth frame fetch loop
+    // Smooth frame fetch loop (Canvas rendering)
     function scheduleNextFrame() {
       if (!isFetching) {
         isFetching = true;
@@ -528,22 +579,22 @@ HTML_DASHBOARD = """
       voiceEnabled = !voiceEnabled;
       const btn = document.getElementById('voice-btn');
       btn.className = 'voice-btn ' + (voiceEnabled ? 'active' : '');
-      btn.innerHTML = voiceEnabled ? '&#128266; Voice: ON' : '&#128263; Voice: OFF';
+      btn.innerHTML = voiceEnabled ? '&#128266; Hands-Free Voice: ON' : '&#128263; Voice: OFF';
       if (!voiceEnabled && window.speechSynthesis) window.speechSynthesis.cancel();
     }
 
-    function speakLastReply() {
-      if (lastReplyText) speakText(lastReplyText);
+    function repeatLastDirective() {
+      if (lastDirectiveAnnouncement) speakText(lastDirectiveAnnouncement);
     }
 
     async function ackDeviation() {
       await fetch('/api/acknowledge', { method: 'POST' });
-      speakText("Deviation acknowledged by operator.");
+      speakText("Deviation acknowledged by operator. Resuming nominal protocol sequence.");
     }
 
     function downloadSnapshot() {
       const link = document.createElement('a');
-      link.download = 'sutra_snapshot_' + Date.now() + '.png';
+      link.download = 'sutra_experiment_snapshot_' + Date.now() + '.png';
       link.href = canvas.toDataURL('image/png');
       link.click();
     }
@@ -567,7 +618,7 @@ HTML_DASHBOARD = """
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ source: src })
         });
-        document.getElementById('badge-text').innerText = 'EDGE LIVE';
+        document.getElementById('badge-text').innerText = 'AUTONOMOUS ACTIVE';
         speakText("Video source switched.");
       } catch (e) {
         alert("Failed to switch video source: " + e);
@@ -577,49 +628,70 @@ HTML_DASHBOARD = """
     function connectIpWebcam() {
       let url = document.getElementById('ipwebcam-url').value.trim();
       if (!url) {
-        alert("Pehle phone ka IP URL dalein (jaise: http://192.168.1.15:8080/video)");
+        alert("Please enter your phone IP URL (e.g. http://192.168.1.15:8080/video)");
         return;
       }
-      if (!url.endsWith('/video') && !url.includes('?')) {
-        url = url.replace(/\\/$/, '') + '/video';
+      if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('rtsp://')) {
+        url = 'http://' + url;
       }
+      url = url.replace('.8080', ':8080');
+      if (!url.endsWith('/video') && !url.includes('?')) {
+        if (url.endsWith('/')) url = url.slice(0, -1);
+        url = url + '/video';
+      }
+      document.getElementById('ipwebcam-url').value = url;
       switchSource(url, null);
     }
 
-    // Assistant Chat
-    async function sendChat() {
-      const input = document.getElementById('chat-input');
-      const text = input.value.trim();
-      if (!text) return;
-      input.value = '';
-      const output = document.getElementById('chat-output');
-      output.innerHTML = '<em>Thinking and analyzing active experiment...</em>';
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: text })
-        });
-        const data = await res.json();
-        lastReplyText = data.reply;
-        output.innerHTML = data.reply.replace(/\\n/g, '<br>');
-        speakText(data.reply);
-      } catch (e) {
-        output.innerHTML = 'Error calling assistant: ' + e;
-      }
-    }
-
-    function askChip(prompt) {
-      document.getElementById('chat-input').value = prompt;
-      sendChat();
-    }
-
-    // Telemetry Polling & Voice Announcements
-    async function fetchEvents() {
+    // Telemetry & Autonomous Copilot Polling Loop
+    async function fetchTelemetry() {
       try {
         const res = await fetch('/api/telemetry');
         const data = await res.json();
+        
+        // 1. Diagnostics & Active Step
+        if (data.diagnostics) {
+          document.getElementById('p95-val').innerText = (data.diagnostics.latency_p95_ms || 0) + ' ms';
+          document.getElementById('ram-val').innerText = (data.diagnostics.memory_rss_mb || 0) + ' MB';
+        }
+        if (data.pipeline) {
+          document.getElementById('step-val').innerText = data.pipeline.current_step_id || 'STEP_01';
+          document.getElementById('step-name-val').innerText = data.pipeline.current_step_name || 'Nominal';
+          document.getElementById('active-action-val').innerText = data.pipeline.active_action || 'IDLE';
+        }
+
+        // 2. Autonomous Copilot Directives
+        if (data.copilot) {
+          const dir = data.copilot;
+          document.getElementById('copilot-status').innerText = dir.current_status || 'Observing...';
+          document.getElementById('copilot-directive').innerText = dir.next_action_directive || 'Continue protocol.';
+          document.getElementById('copilot-spoken-text').innerText = '"' + (dir.spoken_announcement || '') + '"';
+
+          const devBox = document.getElementById('deviation-box');
+          const devTitle = document.getElementById('deviation-title');
+          const devText = document.getElementById('copilot-missing');
+          const copilotCard = document.getElementById('copilot-card');
+
+          if (dir.missing_or_deviation) {
+            devBox.className = 'directive-box directive-alert';
+            devTitle.innerText = '⚠️ Deviation / Missing Step Warning';
+            devText.innerText = dir.missing_or_deviation;
+            copilotCard.style.borderLeftColor = 'var(--danger)';
+          } else {
+            devBox.className = 'directive-box';
+            devTitle.innerText = 'Procedural & Safety Audit';
+            devText.innerText = 'Nominal • Sequence matches flight protocol';
+            copilotCard.style.borderLeftColor = 'var(--primary)';
+          }
+
+          // Voice announcement trigger if changed
+          if (dir.spoken_announcement && dir.spoken_announcement !== lastDirectiveAnnouncement) {
+            lastDirectiveAnnouncement = dir.spoken_announcement;
+            speakText(dir.spoken_announcement);
+          }
+        }
+
+        // 3. Event Logs
         const container = document.getElementById('event-log');
         if (data.events && data.events.length > 0) {
           container.innerHTML = '';
@@ -631,32 +703,10 @@ HTML_DASHBOARD = """
             div.innerHTML = `<strong>[${evt.event_type}]</strong> ${evt.step_name || evt.step_id || ''}<br><span style="color:var(--text-muted)">${timeStr}</span> &bull; Conf: ${evt.confidence}`;
             container.appendChild(div);
           });
-
-          // Check for new state changes to speak aloud
-          const latest = data.events[data.events.length - 1];
-          if (latest && latest.event_id !== lastSpokenEventId) {
-            lastSpokenEventId = latest.event_id;
-            if (latest.event_type === 'DEVIATION_DETECTED') {
-              speakText("Warning! Procedural deviation detected. " + (latest.evidence?.active_activity || "Please check sequence."));
-            } else if (latest.event_type === 'STEP_COMPLETED') {
-              speakText("Step completed: " + (latest.step_name || latest.step_id));
-            } else if (latest.event_type === 'STEP_STARTED') {
-              speakText("Step started: " + (latest.step_name || latest.step_id));
-            }
-          }
-        }
-        if (data.diagnostics) {
-          document.getElementById('p95-val').innerText = (data.diagnostics.latency_p95_ms || 0) + ' ms';
-          document.getElementById('ram-val').innerText = (data.diagnostics.memory_rss_mb || 0) + ' MB';
-          if (data.events && data.events.length > 0) {
-            const latest = data.events[data.events.length - 1];
-            document.getElementById('step-val').innerText = latest.step_id || 'STEP_01';
-            document.getElementById('step-name-val').innerText = latest.step_name || 'In Progress';
-          }
         }
       } catch (e) {}
     }
-    setInterval(fetchEvents, 1000);
+    setInterval(fetchTelemetry, 1000);
   </script>
 </body>
 </html>
@@ -690,11 +740,36 @@ def get_current_frame():
 
 @app.get("/api/telemetry")
 def get_telemetry():
-    global engine_instance
+    global engine_instance, latest_directive
     diag = engine_instance.get_diagnostics() if engine_instance else {}
     events = engine_instance.storage.read_events(limit=25) if engine_instance else []
+    
+    pipeline_state = {}
+    if engine_instance:
+        pe = engine_instance.protocol_engine
+        cur_step = pe.protocol.steps[pe.current_step_idx] if pe.current_step_idx < len(pe.protocol.steps) else None
+        pipeline_state = {
+            "current_step_id": cur_step.id if cur_step else "COMPLETED",
+            "current_step_name": cur_step.name if cur_step else "Protocol Finished",
+            "step_status": pe.step_statuses.get(cur_step.id, "COMPLETED").value if cur_step else "COMPLETED",
+            "active_deviation": pe.active_deviation
+        }
+
+    copilot_data = None
+    if latest_directive:
+        copilot_data = {
+            "timestamp": latest_directive.timestamp,
+            "current_status": latest_directive.current_status,
+            "missing_or_deviation": latest_directive.missing_or_deviation,
+            "next_action_directive": latest_directive.next_action_directive,
+            "spoken_announcement": latest_directive.spoken_announcement,
+            "alert_level": latest_directive.alert_level
+        }
+
     return {
         "diagnostics": diag,
+        "pipeline": pipeline_state,
+        "copilot": copilot_data,
         "events": [e.model_dump() for e in events]
     }
 
@@ -719,7 +794,11 @@ async def switch_source(request: Request):
         from scripts.generate_synthetic_video import create_synthetic_frame_generator
         src_val = create_synthetic_frame_generator(simulate_deviation=False)
     else:
-        src_val = str(src)
+        src_val = str(src).strip()
+        import re
+        src_val = re.sub(r'\.8080', ':8080', src_val)
+        if (src_val.startswith("http://") or src_val.startswith("https://")) and not src_val.endswith("/video") and "?" not in src_val:
+            src_val = src_val.rstrip("/") + "/video"
 
     if engine_instance and engine_instance.ingestor:
         engine_instance.ingestor.switch_source(src_val)
@@ -728,54 +807,19 @@ async def switch_source(request: Request):
     return {"status": "SWITCHED", "source": str(src)}
 
 
-@app.post("/api/chat")
-async def chat_assistant(request: Request):
-    """Interact with SUTRA Flight Guidance Assistant (Groq LLM)."""
-    global engine_instance, assistant_instance
-    body = await request.json()
-    prompt = body.get("prompt", "")
-
-    # Gather live telemetry context
-    ctx = {}
-    if engine_instance:
-        pe = engine_instance.protocol_engine
-        cur_step = pe.protocol.steps[pe.current_step_idx] if pe.current_step_idx < len(pe.protocol.steps) else None
-        completed = [sid for sid, st in pe.step_statuses.items() if st.value == "COMPLETED"]
-        ctx = {
-            "protocol_name": pe.protocol.protocol_name,
-            "current_step_id": cur_step.id if cur_step else "COMPLETED",
-            "current_step_name": cur_step.name if cur_step else "Experiment Finished",
-            "step_status": pe.step_statuses.get(cur_step.id, "COMPLETED").value if cur_step else "COMPLETED",
-            "completed_steps": completed,
-            "active_deviation": pe.active_deviation,
-        }
-
-    reply = assistant_instance.ask_assistant(prompt, ctx)
-    return {"reply": reply}
-
-
-@app.post("/api/set_groq_key")
-async def set_groq_key(request: Request):
-    global assistant_instance
-    body = await request.json()
-    key = body.get("api_key", "")
-    success = assistant_instance.set_api_key(key)
-    return {"success": success}
-
-
 def start_web_server(engine: SutraVisionEngine, host: str = "127.0.0.1", port: int = 8000):
     """
     Launch background thread running the engine loop, and start uvicorn web server.
     """
-    global engine_instance, latest_annotated_jpeg
+    global engine_instance, latest_annotated_jpeg, latest_directive, copilot_engine
     engine_instance = engine
     engine.start()
 
     import threading
 
     def pipeline_worker():
-        global latest_annotated_jpeg
-        # Continuous loop that NEVER breaks on empty frames
+        global latest_annotated_jpeg, latest_directive
+
         while engine._running:
             try:
                 ingested = engine.frame_buffer.get_latest(timeout=0.2)
@@ -788,6 +832,26 @@ def start_web_server(engine: SutraVisionEngine, host: str = "127.0.0.1", port: i
                     ret, buf = cv2.imencode(".jpg", res.annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     if ret:
                         latest_annotated_jpeg = buf.tobytes()
+
+                # Autonomous Copilot Evaluation (Periodic or on step change/deviation)
+                pe = engine.protocol_engine
+                cur_step = pe.protocol.steps[pe.current_step_idx] if pe.current_step_idx < len(pe.protocol.steps) else None
+                
+                ctx = {
+                    "protocol_name": pe.protocol.protocol_name,
+                    "current_step_id": cur_step.id if cur_step else "COMPLETED",
+                    "current_step_name": cur_step.name if cur_step else "Experiment Finished",
+                    "step_status": pe.step_statuses.get(cur_step.id, "COMPLETED").value if cur_step else "COMPLETED",
+                    "active_deviation": pe.active_deviation,
+                    "detected_objects": [o.class_name for o in (res.objects or [])],
+                    "active_action": res.temporal_state.confirmed_activity if res.temporal_state else None,
+                    "action_duration": res.temporal_state.duration_active if res.temporal_state else 0.0,
+                }
+
+                directive = copilot_engine.evaluate_state_autonomously(ctx)
+                if directive:
+                    latest_directive = directive
+
             except Exception as e:
                 logger.error(f"Error in pipeline worker: {e}")
                 time.sleep(0.05)
@@ -796,7 +860,7 @@ def start_web_server(engine: SutraVisionEngine, host: str = "127.0.0.1", port: i
     t.start()
 
     print("\n" + "=" * 65)
-    print(" [OK] SUTRA LIVE WEB HUD IS RUNNING!")
+    print(" [OK] SUTRA AUTONOMOUS WEB HUD IS RUNNING!")
     print(f" [OK] Open your browser at: http://{host}:{port}")
     print("=" * 65 + "\n")
 

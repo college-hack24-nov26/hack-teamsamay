@@ -118,7 +118,13 @@ class FrameIngestor:
 
         self._release_capture()
         try:
-            cap = cv2.VideoCapture(self.source)
+            if isinstance(self.source, int) and hasattr(cv2, 'CAP_DSHOW'):
+                cap = cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
+                if not cap.isOpened():
+                    cap = cv2.VideoCapture(self.source)
+            else:
+                cap = cv2.VideoCapture(self.source)
+
             if not cap.isOpened():
                 return False
 

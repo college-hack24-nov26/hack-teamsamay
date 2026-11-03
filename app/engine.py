@@ -129,7 +129,11 @@ class SutraVisionEngine:
         if src.isdigit():
             src_val = int(src)
         else:
-            src_val = src
+            src_val = str(src).strip()
+            import re
+            src_val = re.sub(r'\.8080', ':8080', src_val)
+            if (src_val.startswith("http://") or src_val.startswith("https://")) and not src_val.endswith("/video") and "?" not in src_val:
+                src_val = src_val.rstrip("/") + "/video"
 
         return FrameIngestor(
             source=src_val,
