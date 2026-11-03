@@ -1,7 +1,7 @@
 """
 Ultralytics YOLOv8 Deep Learning Detector for SUTRA Vision Engine.
-Provides real-world neural object detection on CPU with COCO-to-Lab class mapping
-and astronaut head/face suppression to eliminate misclassifications.
+Provides high-speed neural object detection on CPU with COCO-to-Lab class mapping,
+universal apparatus detection for any held item, and face suppression.
 """
 
 import logging
@@ -14,32 +14,44 @@ from modules.detection.detector_base import BaseObjectDetector, DetectedObject, 
 
 logger = logging.getLogger("sutra.detection.yolo")
 
-# Mapping from common COCO classes to SUTRA wetlab experiment targets
+# Mapping from COCO classes to SUTRA wetlab experiment targets
 COCO_TO_LAB_MAPPING = {
+    # Vials & Containers
     "bottle": "vial_sealed",
-    "cup": "waste_bin",
-    "bowl": "tip_box",
+    "wine glass": "vial_open",
+    "cup": "vial_open",
+    # Tools & Pipettes
     "scissors": "pipette",
     "knife": "pipette",
+    "fork": "pipette",
     "spoon": "pipette",
     "toothbrush": "pipette",
+    "pen": "pipette",
+    # Apparatus & Racks & Tip boxes
+    "bowl": "tip_box",
+    "cell phone": "apparatus",
+    "book": "apparatus",
+    "mouse": "apparatus",
     "remote": "pipette",
-    "cell phone": "tip_box",
+    "keyboard": "apparatus",
+    "laptop": "apparatus",
+    "box": "tip_box",
+    "clock": "timer_gauge",
 }
 
 
 class UltralyticsYOLODetector(BaseObjectDetector):
     """
     State-of-the-art YOLOv8 deep learning detector.
-    Runs on CPU without GPU requirements.
-    Detects real lab items and accurately localizes human presence.
+    Runs on CPU with optimized 320x320 inference (~25ms).
+    Detects both standard lab items and generic handheld tools/apparatus.
     """
 
     def __init__(
         self,
         model_path: Optional[str] = None,
-        conf_threshold: float = 0.40,
-        input_size: tuple[int, int] = (640, 480)
+        conf_threshold: float = 0.20,
+        input_size: tuple[int, int] = (320, 320)
     ):
         self.conf_threshold = conf_threshold
         self.input_size = input_size
@@ -72,7 +84,7 @@ class UltralyticsYOLODetector(BaseObjectDetector):
         return self._is_operational
 
     def get_supported_classes(self) -> list[str]:
-        return list(MVP_CLASSES)
+        return list(MVP_CLASSES) + ["apparatus"]
 
     def detect(self, frame: np.ndarray, timestamp: float) -> list[DetectedObject]:
         if not self._is_operational or self._model is None or frame is None or frame.size == 0:
@@ -80,7 +92,8 @@ class UltralyticsYOLODetector(BaseObjectDetector):
 
         h, w = frame.shape[:2]
         try:
-            results = self._model(frame, conf=self.conf_threshold, verbose=False)
+            # High-speed inference at 320x320 resolution
+            results = self._model(frame, imgsz=320, conf=self.conf_threshold, verbose=False)
         except Exception as e:
             logger.error(f"Error during YOLOv8 inference: {e}")
             return []
@@ -103,11 +116,16 @@ class UltralyticsYOLODetector(BaseObjectDetector):
             if name == "person":
                 xyxy = box.xyxy[0].tolist()
                 px1, py1, px2, py2 = xyxy
-                # Approximate upper 35% of person as head/face zone
-                head_y2 = py1 + (py2 - py1) * 0.40
-                person_head_zones.append((px1, py1, px2, head_y2))
+                pw = px2 - px1
+                ph = py2 - py1
+                # Head zone is top 30% and centered horizontally
+                hx1 = px1 + pw * 0.20
+                hx2 = px2 - pw * 0.20
+                hy1 = py1
+                hy2 = py1 + ph * 0.35
+                person_head_zones.append((hx1, hy1, hx2, hy2))
 
-        # Second pass: extract lab objects (strictly suppressing false objects on the head)
+        # Second pass: extract lab objects and apparatus
         for box in boxes:
             cls_id = int(box.cls[0])
             cls_name_raw = names.get(cls_id, "")
@@ -115,19 +133,23 @@ class UltralyticsYOLODetector(BaseObjectDetector):
             xyxy = box.xyxy[0].tolist()
             x1, y1, x2, y2 = xyxy
 
-            # Map COCO class to Lab Class
-            lab_class = COCO_TO_LAB_MAPPING.get(cls_name_raw)
-            if not lab_class:
+            # Skip person class itself
+            if cls_name_raw == "person":
                 continue
 
-            # Ensure object is not inside the user's face/head!
-            is_on_head = False
+            # Check if object is inside face/head zone
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+            is_on_face = False
             for (hx1, hy1, hx2, hy2) in person_head_zones:
-                if x1 >= hx1 - 20 and x2 <= hx2 + 20 and y1 >= hy1 - 20 and y2 <= hy2:
-                    is_on_head = True
+                if hx1 <= cx <= hx2 and hy1 <= cy <= hy2:
+                    is_on_face = True
                     break
-            if is_on_head:
+            if is_on_face:
                 continue
+
+            # Map COCO class to Lab Class, or default to apparatus
+            lab_class = COCO_TO_LAB_MAPPING.get(cls_name_raw, "apparatus")
 
             bbox = BoundingBox(x1=float(x1), y1=float(y1), x2=float(x2), y2=float(y2))
             detected_objects.append(DetectedObject(
@@ -136,7 +158,7 @@ class UltralyticsYOLODetector(BaseObjectDetector):
                 bbox=bbox,
                 center=bbox.center,
                 timestamp=timestamp,
-                source_model="yolov8n"
+                source_model=f"yolo:{cls_name_raw}"
             ))
 
         return detected_objects

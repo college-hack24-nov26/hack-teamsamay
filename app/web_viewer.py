@@ -1,10 +1,10 @@
 """
 Real-Time Browser-Based Live Video HUD for SUTRA Vision Engine.
 Includes:
-- HTML5 Canvas high-performance real-time video stream (30 FPS)
+- HTML5 Canvas high-performance real-time video stream (30+ FPS)
+- Interactive Voice AI Assistant (Speech-to-Text Microphone + Audio Response)
 - Autonomous Flight Copilot Engine (Zero typing - automatically observes, guides & speaks)
 - Mobile IP Webcam & USB Webcam runtime switching
-- Hands-Free Voice Directives (Speech Synthesis) for step updates & deviation warnings
 - Light / Dark Theme toggle & Snapshot capture
 """
 
@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.config import SutraConfig, get_config
 from app.engine import SutraVisionEngine
 from modules.assistant.copilot_engine import AutonomousCopilotEngine, CopilotDirective
+from modules.assistant.groq_assistant import SutraExperimentAssistant
 
 logger = logging.getLogger("sutra.web_viewer")
 
@@ -36,7 +37,9 @@ app = FastAPI(title="SUTRA Autonomous BAS Experiment Guardian HUD")
 engine_instance: Optional[SutraVisionEngine] = None
 latest_annotated_jpeg: Optional[bytes] = None
 copilot_engine = AutonomousCopilotEngine()
+assistant_instance = SutraExperimentAssistant()
 latest_directive: Optional[CopilotDirective] = None
+latest_detection_summary: list[str] = []
 
 
 HTML_DASHBOARD = """
@@ -45,7 +48,7 @@ HTML_DASHBOARD = """
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SUTRA AI - Autonomous BAS Experiment Guardian</title>
+  <title>SUTRA AI - Autonomous BAS Experiment Guardian & Voice Assistant</title>
   <style>
     :root {
       --bg: #f8fafc;
@@ -254,6 +257,16 @@ HTML_DASHBOARD = """
       color: white;
       border-color: #8b5cf6;
     }
+    button.mic-btn {
+      background: var(--primary);
+      color: white;
+      border: none;
+      font-weight: 700;
+    }
+    button.mic-btn.listening {
+      background: #ef4444;
+      animation: pulse 1s infinite;
+    }
 
     /* Autonomous Copilot Section */
     .copilot-card {
@@ -310,6 +323,36 @@ HTML_DASHBOARD = """
     }
     .directive-alert .directive-text {
       color: var(--danger);
+    }
+
+    /* Voice Dialogue Console */
+    .voice-console {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 12px;
+    }
+    .voice-console-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--primary);
+    }
+    .transcript-line {
+      font-size: 13px;
+      color: var(--text-muted);
+      font-style: italic;
+      margin-bottom: 4px;
+    }
+    .response-line {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.4;
     }
 
     /* Diagnostics & Events */
@@ -393,7 +436,8 @@ HTML_DASHBOARD = """
       <div class="brand-subtitle">Smart India Hackathon 2026 (SIH26174) &bull; Bharatiya Antariksh Station (Space Technology)</div>
     </div>
     <div class="header-actions">
-      <button onclick="toggleVoice()" id="voice-btn" class="voice-btn active">&#128266; Hands-Free Voice: ON</button>
+      <button onclick="toggleVoiceMic()" id="mic-btn" class="mic-btn">&#127908; Talk to SUTRA (Voice Mode)</button>
+      <button onclick="toggleVoice()" id="voice-btn" class="voice-btn active">&#128266; Auto Voice: ON</button>
       <button onclick="toggleTheme()" id="theme-btn">&#9790; Dark Mode</button>
       <button onclick="openHelpModal()">&#10067; Phone Guide</button>
       <div class="badge" id="status-badge">
@@ -428,7 +472,7 @@ HTML_DASHBOARD = """
         </div>
       </div>
 
-      <!-- Autonomous Cognitive Copilot Section (No Chatbot - Pure Autonomous Oversight) -->
+      <!-- Autonomous Cognitive Copilot Section -->
       <div class="copilot-card" id="copilot-card">
         <div class="copilot-header">
           <div style="display: flex; align-items: center; gap: 8px;">
@@ -459,9 +503,19 @@ HTML_DASHBOARD = """
           </div>
         </div>
 
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 12px; color: var(--text-muted);">
-          <span>&#128266; Spoken Voice: <strong id="copilot-spoken-text" style="color: var(--text);">"Standby for automated directive."</strong></span>
-          <button onclick="repeatLastDirective()" style="padding: 4px 10px; font-size: 11px;">&#128260; Repeat Voice</button>
+        <!-- Interactive Voice Dialogue Console -->
+        <div class="voice-console" id="voice-console">
+          <div class="voice-console-header">
+            <span>&#127908; Two-Way Voice AI Dialogue</span>
+            <span id="mic-status-label" style="font-size: 11px; color: var(--text-muted);">Click "Talk to SUTRA" to speak</span>
+          </div>
+          <div class="transcript-line" id="user-voice-transcript">Say: "What is this object?" or "Main abhi kya kar raha hoon?"...</div>
+          <div class="response-line" id="ai-voice-response">SUTRA Copilot is standing by to converse hands-free.</div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+          <span>&#128266; Latest Directive: <strong id="copilot-spoken-text" style="color: var(--text);">"Standby for automated directive."</strong></span>
+          <button onclick="repeatLastDirective()" style="padding: 4px 10px; font-size: 11px;">&#128260; Repeat Audio</button>
         </div>
       </div>
     </div>
@@ -492,6 +546,10 @@ HTML_DASHBOARD = """
       <div class="metric-row">
         <span>Observed Action:</span>
         <span id="active-action-val" style="font-size: 12px; font-weight: 600; color: #10b981;">INSPECTING</span>
+      </div>
+      <div class="metric-row">
+        <span>Detected Objects:</span>
+        <span id="detected-items-val" style="font-size: 12px; font-weight: 600; color: var(--primary);">None</span>
       </div>
 
       <div class="card-heading" style="margin-top: 14px;">
@@ -531,6 +589,8 @@ HTML_DASHBOARD = """
     let voiceEnabled = true;
     let lastSpokenText = '';
     let lastDirectiveAnnouncement = '';
+    let isListening = false;
+    let recognition = null;
 
     img.onload = function() {
       if (img.width && img.height) {
@@ -579,12 +639,89 @@ HTML_DASHBOARD = """
       voiceEnabled = !voiceEnabled;
       const btn = document.getElementById('voice-btn');
       btn.className = 'voice-btn ' + (voiceEnabled ? 'active' : '');
-      btn.innerHTML = voiceEnabled ? '&#128266; Hands-Free Voice: ON' : '&#128263; Voice: OFF';
+      btn.innerHTML = voiceEnabled ? '&#128266; Auto Voice: ON' : '&#128263; Auto Voice: OFF';
       if (!voiceEnabled && window.speechSynthesis) window.speechSynthesis.cancel();
     }
 
     function repeatLastDirective() {
       if (lastDirectiveAnnouncement) speakText(lastDirectiveAnnouncement);
+    }
+
+    // Interactive Voice Assistant (Speech-to-Text)
+    function initSpeechRecognition() {
+      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRec) {
+        alert("Speech Recognition is not supported by your browser. Please use Chrome or Edge.");
+        return null;
+      }
+      const rec = new SpeechRec();
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.lang = 'en-US';
+
+      rec.onstart = function() {
+        isListening = true;
+        const btn = document.getElementById('mic-btn');
+        btn.className = 'mic-btn listening';
+        btn.innerHTML = '&#128308; Listening... (Speak Now)';
+        document.getElementById('mic-status-label').innerText = 'Listening to your voice...';
+      };
+
+      rec.onresult = async function(event) {
+        const transcript = event.results[0][0].transcript;
+        document.getElementById('user-voice-transcript').innerText = 'You: "' + transcript + '"';
+        document.getElementById('ai-voice-response').innerText = 'Thinking and analyzing active visual feed...';
+
+        try {
+          const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: transcript })
+          });
+          const data = await res.json();
+          document.getElementById('ai-voice-response').innerText = 'SUTRA: ' + data.reply;
+          speakText(data.reply);
+        } catch (e) {
+          document.getElementById('ai-voice-response').innerText = 'Error calling AI: ' + e;
+        }
+      };
+
+      rec.onerror = function(event) {
+        isListening = false;
+        resetMicButton();
+        document.getElementById('mic-status-label').innerText = 'Mic error: ' + event.error;
+      };
+
+      rec.onend = function() {
+        isListening = false;
+        resetMicButton();
+      };
+
+      return rec;
+    }
+
+    function resetMicButton() {
+      const btn = document.getElementById('mic-btn');
+      btn.className = 'mic-btn';
+      btn.innerHTML = '&#127908; Talk to SUTRA (Voice Mode)';
+      document.getElementById('mic-status-label').innerText = 'Click to speak';
+    }
+
+    function toggleVoiceMic() {
+      if (!recognition) {
+        recognition = initSpeechRecognition();
+      }
+      if (!recognition) return;
+
+      if (isListening) {
+        recognition.stop();
+      } else {
+        try {
+          recognition.start();
+        } catch (e) {
+          recognition.stop();
+        }
+      }
     }
 
     async function ackDeviation() {
@@ -658,6 +795,11 @@ HTML_DASHBOARD = """
           document.getElementById('step-val').innerText = data.pipeline.current_step_id || 'STEP_01';
           document.getElementById('step-name-val').innerText = data.pipeline.current_step_name || 'Nominal';
           document.getElementById('active-action-val').innerText = data.pipeline.active_action || 'IDLE';
+          if (data.pipeline.detected_objects && data.pipeline.detected_objects.length > 0) {
+            document.getElementById('detected-items-val').innerText = data.pipeline.detected_objects.join(', ');
+          } else {
+            document.getElementById('detected-items-val').innerText = 'None';
+          }
         }
 
         // 2. Autonomous Copilot Directives
@@ -684,7 +826,7 @@ HTML_DASHBOARD = """
             copilotCard.style.borderLeftColor = 'var(--primary)';
           }
 
-          // Voice announcement trigger if changed
+          // Auto voice announcement trigger if changed
           if (dir.spoken_announcement && dir.spoken_announcement !== lastDirectiveAnnouncement) {
             lastDirectiveAnnouncement = dir.spoken_announcement;
             speakText(dir.spoken_announcement);
@@ -740,7 +882,7 @@ def get_current_frame():
 
 @app.get("/api/telemetry")
 def get_telemetry():
-    global engine_instance, latest_directive
+    global engine_instance, latest_directive, latest_detection_summary
     diag = engine_instance.get_diagnostics() if engine_instance else {}
     events = engine_instance.storage.read_events(limit=25) if engine_instance else []
     
@@ -752,7 +894,8 @@ def get_telemetry():
             "current_step_id": cur_step.id if cur_step else "COMPLETED",
             "current_step_name": cur_step.name if cur_step else "Protocol Finished",
             "step_status": pe.step_statuses.get(cur_step.id, "COMPLETED").value if cur_step else "COMPLETED",
-            "active_deviation": pe.active_deviation
+            "active_deviation": pe.active_deviation,
+            "detected_objects": latest_detection_summary
         }
 
     copilot_data = None
@@ -807,18 +950,44 @@ async def switch_source(request: Request):
     return {"status": "SWITCHED", "source": str(src)}
 
 
+@app.post("/api/chat")
+async def chat_assistant(request: Request):
+    """Two-way Voice AI conversation with SUTRA Flight Assistant."""
+    global engine_instance, assistant_instance, latest_detection_summary
+    body = await request.json()
+    prompt = body.get("prompt", "")
+
+    ctx = {}
+    if engine_instance:
+        pe = engine_instance.protocol_engine
+        cur_step = pe.protocol.steps[pe.current_step_idx] if pe.current_step_idx < len(pe.protocol.steps) else None
+        completed = [sid for sid, st in pe.step_statuses.items() if st.value == "COMPLETED"]
+        ctx = {
+            "protocol_name": pe.protocol.protocol_name,
+            "current_step_id": cur_step.id if cur_step else "COMPLETED",
+            "current_step_name": cur_step.name if cur_step else "Experiment Finished",
+            "step_status": pe.step_statuses.get(cur_step.id, "COMPLETED").value if cur_step else "COMPLETED",
+            "completed_steps": completed,
+            "active_deviation": pe.active_deviation,
+            "detected_objects": latest_detection_summary,
+        }
+
+    reply = assistant_instance.ask_assistant(prompt, ctx)
+    return {"reply": reply}
+
+
 def start_web_server(engine: SutraVisionEngine, host: str = "127.0.0.1", port: int = 8000):
     """
     Launch background thread running the engine loop, and start uvicorn web server.
     """
-    global engine_instance, latest_annotated_jpeg, latest_directive, copilot_engine
+    global engine_instance, latest_annotated_jpeg, latest_directive, copilot_engine, latest_detection_summary
     engine_instance = engine
     engine.start()
 
     import threading
 
     def pipeline_worker():
-        global latest_annotated_jpeg, latest_directive
+        global latest_annotated_jpeg, latest_directive, latest_detection_summary
 
         while engine._running:
             try:
@@ -833,6 +1002,9 @@ def start_web_server(engine: SutraVisionEngine, host: str = "127.0.0.1", port: i
                     if ret:
                         latest_annotated_jpeg = buf.tobytes()
 
+                # Update live detected classes summary
+                latest_detection_summary = [o.class_name for o in (res.objects or [])]
+
                 # Autonomous Copilot Evaluation (Periodic or on step change/deviation)
                 pe = engine.protocol_engine
                 cur_step = pe.protocol.steps[pe.current_step_idx] if pe.current_step_idx < len(pe.protocol.steps) else None
@@ -843,7 +1015,7 @@ def start_web_server(engine: SutraVisionEngine, host: str = "127.0.0.1", port: i
                     "current_step_name": cur_step.name if cur_step else "Experiment Finished",
                     "step_status": pe.step_statuses.get(cur_step.id, "COMPLETED").value if cur_step else "COMPLETED",
                     "active_deviation": pe.active_deviation,
-                    "detected_objects": [o.class_name for o in (res.objects or [])],
+                    "detected_objects": latest_detection_summary,
                     "active_action": res.temporal_state.confirmed_activity if res.temporal_state else None,
                     "action_duration": res.temporal_state.duration_active if res.temporal_state else 0.0,
                 }
@@ -860,7 +1032,7 @@ def start_web_server(engine: SutraVisionEngine, host: str = "127.0.0.1", port: i
     t.start()
 
     print("\n" + "=" * 65)
-    print(" [OK] SUTRA AUTONOMOUS WEB HUD IS RUNNING!")
+    print(" [OK] SUTRA AUTONOMOUS WEB HUD & VOICE ASSISTANT RUNNING!")
     print(f" [OK] Open your browser at: http://{host}:{port}")
     print("=" * 65 + "\n")
 

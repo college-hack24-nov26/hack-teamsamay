@@ -21,6 +21,7 @@ from modules.detection.yolo_detector import UltralyticsYOLODetector
 from modules.detection.onnx_detector import ONNXObjectDetector
 from modules.detection.heuristic_detector import HeuristicLabDetector
 from modules.pose.pose_base import BasePoseEstimator, HandPose
+from modules.pose.yolo_pose_estimator import YOLOPoseEstimator
 from modules.pose.neural_palm_pose import NeuralPalmPoseEstimator
 from modules.pose.mediapipe_pose import MediaPipePoseEstimator
 from modules.pose.kinematic_pose import KinematicHandTracker
@@ -116,7 +117,13 @@ class SutraVisionEngine:
         return HeuristicLabDetector(min_confidence=self.config.detection_conf_threshold)
 
     def _initialize_pose(self) -> BasePoseEstimator:
-        # Priority 1: Real OpenCV Zoo MediaPipe ONNX Palm Detector
+        # Priority 1: High-speed YOLOv8 Deep Learning Body & Wrist/Hand Pose
+        yolo_pose = YOLOPoseEstimator()
+        if yolo_pose.is_operational():
+            logger.info("Using real Deep-Learning YOLOPoseEstimator for hand tracking.")
+            return yolo_pose
+
+        # Priority 2: Real OpenCV Zoo MediaPipe ONNX Palm Detector
         neural_palm = NeuralPalmPoseEstimator()
         if neural_palm.is_operational():
             logger.info("Using real Deep-Learning NeuralPalmPoseEstimator (OpenCV Zoo MediaPipe ONNX).")
