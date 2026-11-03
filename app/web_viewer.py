@@ -376,8 +376,8 @@ def start_web_server(engine: SutraVisionEngine, host: str = "127.0.0.1", port: i
     t.start()
 
     print("\n" + "=" * 65)
-    print(" [✓] SUTRA LIVE WEB HUD IS RUNNING!")
-    print(f" [✓] Open your browser at: http://{host}:{port}")
+    print(" [OK] SUTRA LIVE WEB HUD IS RUNNING!")
+    print(f" [OK] Open your browser at: http://{host}:{port}")
     print("=" * 65 + "\n")
 
     uvicorn.run(app, host=host, port=port, log_level="warning")
