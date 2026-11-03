@@ -179,3 +179,4 @@ class InteractionEngine:
                 del self._interaction_history[k]
 
         return relations
+

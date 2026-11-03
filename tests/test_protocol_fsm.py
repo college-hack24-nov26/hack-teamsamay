@@ -99,3 +99,4 @@ def test_checkpoint_save_and_restore():
     assert success is True
     assert engine.current_step_idx == 2
     assert engine.step_statuses["STEP_02"] == StepStatus.COMPLETED
+

@@ -160,3 +160,4 @@ def run_benchmark(num_frames: int = 150) -> dict:
 
 if __name__ == "__main__":
     run_benchmark(num_frames=100)
+

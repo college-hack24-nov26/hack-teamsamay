@@ -90,3 +90,4 @@ class EventStorage:
                 "total_bytes_written": self._total_bytes_written,
                 "size_kb": round(self._total_bytes_written / 1024.0, 2)
             }
+

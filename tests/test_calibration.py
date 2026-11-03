@@ -60,3 +60,4 @@ def test_calibration_save_and_load(tmp_path):
     success = loaded_norm.load_calibration(save_file)
     assert success is True
     assert loaded_norm.is_calibrated is True
+

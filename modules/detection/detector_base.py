@@ -92,3 +92,4 @@ class BaseObjectDetector(ABC):
     def is_operational(self) -> bool:
         """Check if weights are loaded and the engine is ready for inference."""
         pass
+

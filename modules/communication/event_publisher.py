@@ -156,3 +156,4 @@ class EventPublisher:
             "total_failed": self._total_failed,
             "total_dropped": self._total_dropped
         }
+

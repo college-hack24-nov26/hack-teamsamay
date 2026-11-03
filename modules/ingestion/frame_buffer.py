@@ -112,3 +112,4 @@ class LatestFrameBuffer:
                 "current_depth": len(self._buffer),
                 "max_capacity": self.max_capacity
             }
+

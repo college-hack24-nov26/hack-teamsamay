@@ -67,3 +67,4 @@ def test_hoi_tool_enters_vial():
     assert len(tool_rels) == 1
     assert tool_rels[0].subject == "Pipette"
     assert tool_rels[0].target == "vial_open"
+

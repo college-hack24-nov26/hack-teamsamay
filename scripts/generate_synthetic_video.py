@@ -140,3 +140,4 @@ def generate_video_file(output_path: str, simulate_deviation: bool = False, tota
 if __name__ == "__main__":
     generate_video_file("data/sample_normal_run.mp4", simulate_deviation=False)
     generate_video_file("data/sample_deviation_run.mp4", simulate_deviation=True)
+

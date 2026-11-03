@@ -62,3 +62,4 @@ class BasePoseEstimator(ABC):
     def is_operational(self) -> bool:
         """Check if the pose engine is operational."""
         pass
+

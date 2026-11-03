@@ -51,3 +51,4 @@ def test_mock_pose_estimator():
     res = mock.estimate(np.zeros((50, 50, 3), dtype=np.uint8))
     assert len(res) == 1
     assert res[0].handedness == "Right"
+

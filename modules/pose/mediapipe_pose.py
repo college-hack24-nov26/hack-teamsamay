@@ -31,6 +31,7 @@ class MediaPipePoseEstimator(BasePoseEstimator):
         self._hands = None
 
         try:
+            # pyrefly: ignore[missing-import]
             import mediapipe as mp
             self._mp_hands = mp.solutions.hands
             self._hands = self._mp_hands.Hands(
@@ -111,3 +112,4 @@ class MediaPipePoseEstimator(BasePoseEstimator):
             ))
 
         return poses
+

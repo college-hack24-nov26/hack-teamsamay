@@ -174,3 +174,4 @@ class ONNXObjectDetector(BaseObjectDetector):
                 ))
 
         return results
+

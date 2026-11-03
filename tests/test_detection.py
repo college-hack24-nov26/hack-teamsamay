@@ -75,3 +75,4 @@ def test_onnx_detector_graceful_missing_weights():
     onnx_det = ONNXObjectDetector(model_path="non_existent_weights.onnx")
     assert onnx_det.is_operational() is False
     assert onnx_det.detect(np.zeros((100, 100, 3), dtype=np.uint8), 0.0) == []
+

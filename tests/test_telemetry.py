@@ -66,3 +66,4 @@ def test_event_storage_jsonl_and_export(tmp_path):
         exported_array = json.load(f)
     assert len(exported_array) == 3
     assert exported_array[2]["event_type"] == "DEVIATION_DETECTED"
+

@@ -76,3 +76,4 @@ def test_publisher_deduplication():
 
     # Queue should only have 1 item
     assert pub.get_stats()["queue_depth"] == 1
+

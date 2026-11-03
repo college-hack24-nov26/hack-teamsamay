@@ -60,3 +60,4 @@ def create_synthetic_hand_pose(
         index_tip=index_tip,
         thumb_tip=thumb_tip
     )
+

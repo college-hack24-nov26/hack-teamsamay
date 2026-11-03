@@ -76,3 +76,4 @@ def test_short_occlusion_tolerance():
         engine.push_frame([], [], [], timestamp=t)
     st_dropped = engine.push_frame([], [], [], timestamp=2.5)
     assert st_dropped.confirmed_activity is None
+

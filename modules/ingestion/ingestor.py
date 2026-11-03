@@ -230,3 +230,4 @@ class FrameIngestor:
                     self.on_disconnect()
                 except Exception as e:
                     logger.error(f"Error in on_disconnect callback: {e}")
+

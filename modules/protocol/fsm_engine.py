@@ -263,3 +263,4 @@ class ProtocolEngine:
                     return "STEP_COMPLETED", completed_payload
 
         return None, None
+

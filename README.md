@@ -235,3 +235,4 @@ Measured on a standard laptop CPU (Windows x86_64, 12 threads, no GPU):
 - Compile ONNX models to **NVIDIA TensorRT** FP16/INT8 engines via `Jetson_TensorRTBackend`.
 - Ingest multi-camera streams via zero-copy hardware GStreamer pipelines (`nvv4l2camerasrc ! nvvidconv ! NVMM`).
 - Integrate local quantized SLM (`llama.cpp` Llama-3-8B GGUF) and Piper TTS for natural language astronaut interaction.
+

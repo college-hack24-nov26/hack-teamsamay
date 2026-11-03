@@ -58,3 +58,4 @@ class TelemetryEvent(BaseModel):
     def to_json_str(self) -> str:
         """Serialize to compact JSON string."""
         return self.model_dump_json()
+

@@ -50,3 +50,4 @@ cp runs/detect/train/weights/best.onnx models/yolo_sutra.onnx
 ```
 
 The engine will automatically detect and load `models/yolo_sutra.onnx` on next launch!
+

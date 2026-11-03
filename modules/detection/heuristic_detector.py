@@ -105,3 +105,4 @@ class HeuristicLabDetector(BaseObjectDetector):
                 ))
 
         return results
+

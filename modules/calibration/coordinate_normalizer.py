@@ -129,3 +129,4 @@ class RackCoordinateNormalizer:
         except Exception as e:
             logger.warning(f"Could not load calibration file '{filepath}': {e}")
         return False
+

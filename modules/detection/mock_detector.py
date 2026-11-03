@@ -40,3 +40,4 @@ class MockObjectDetector(BaseObjectDetector):
             d_copy.timestamp = timestamp
             res.append(d_copy)
         return res
+

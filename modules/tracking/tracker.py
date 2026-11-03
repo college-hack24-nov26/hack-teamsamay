@@ -129,3 +129,4 @@ class CentroidTracker:
                 self._tracks[tid] = TrackedEntity(tid, det)
 
         return detections
+
