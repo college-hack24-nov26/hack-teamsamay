@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Testing & Cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Data, Events & Videos
+data/events/*.jsonl
+data/events/*.json
+data/*.mp4
+data/*.avi
+!data/events/.gitkeep
+
+# Model weights
+models/*.onnx
+models/*.pt
+models/*.bin
+
+# Environments
+.env
+
+# OS
+.DS_Store
+Thumbs.db

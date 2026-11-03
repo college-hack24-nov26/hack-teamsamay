@@ -1,0 +1,84 @@
+# SUTRA Demonstration Protocol Specification
+# NOTE: This is a representative demonstration workflow for SIH hackathon evaluation.
+# It is NOT an official ISRO or Bharatiya Antariksh Station (BAS) protocol.
+
+protocol_id: "DEMO-WETLAB-01"
+protocol_name: "Microgravity Biological Reagent Dispensation (Mock Assay)"
+version: "1.0"
+description: "Representative 5-step mock assay demonstrating temporal state verification, deviation detection, and telemetry logging."
+
+steps:
+  - id: "STEP_01"
+    index: 1
+    name: "Workspace Inspection & Sanitization"
+    description: "Astronaut inspects payload bay, verifies rack anchors, and confirms sterile work surface."
+    required_activities: ["INSPECTING_WORKSPACE"]
+    required_objects: ["hand"]
+    forbidden_objects: []
+    min_duration_seconds: 1.5
+    max_duration_seconds: 45.0
+    preconditions: []
+    postconditions: ["WORKSPACE_CLEARED"]
+
+  - id: "STEP_02"
+    index: 2
+    name: "Sample Container Unsealing"
+    description: "Astronaut unscrews or depresses the seal of the target biological sample container."
+    required_activities: ["UNSEALING_CONTAINER"]
+    required_objects: ["hand", "vial_sealed"]
+    required_interactions:
+      - subject: "Hand_R"
+        verb: "GRASPS"
+        target: "vial_sealed"
+    min_duration_seconds: 2.0
+    max_duration_seconds: 60.0
+    preconditions: ["STEP_01"]
+    postconditions: ["VIAL_OPENED"]
+
+  - id: "STEP_03"
+    index: 3
+    name: "Reagent Aspiration"
+    description: "Astronaut grasps micropipette, inserts tip into reagent, and draws required volume."
+    required_activities: ["ASPIRATING_REAGENT", "HOLDING_PIPETTE"]
+    required_objects: ["hand", "pipette", "vial_open"]
+    required_interactions:
+      - subject: "Hand_R"
+        verb: "GRASPS"
+        target: "pipette"
+      - subject: "Pipette"
+        verb: "ENTERS"
+        target: "vial_open"
+    min_duration_seconds: 2.5
+    max_duration_seconds: 90.0
+    preconditions: ["STEP_02"]
+    postconditions: ["REAGENT_CHARGED"]
+
+  - id: "STEP_04"
+    index: 4
+    name: "Liquid Dispensation"
+    description: "Astronaut moves charged pipette to target container and discharges reagent buffer."
+    required_activities: ["DISPENSING_LIQUID"]
+    required_objects: ["hand", "pipette", "vial_open"]
+    required_interactions:
+      - subject: "Pipette"
+        verb: "ENTERS"
+        target: "vial_open"
+    min_duration_seconds: 2.0
+    max_duration_seconds: 90.0
+    preconditions: ["STEP_03"]
+    postconditions: ["DISPENSATION_VERIFIED"]
+
+  - id: "STEP_05"
+    index: 5
+    name: "Container Sealing"
+    description: "Astronaut reseals target container and returns tool to rack cradle."
+    required_activities: ["SEALING_CONTAINER"]
+    required_objects: ["hand", "vial_open"]
+    required_interactions:
+      - subject: "Hand_R"
+        verb: "GRASPS"
+        target: "vial_open"
+    min_duration_seconds: 2.0
+    max_duration_seconds: 60.0
+    preconditions: ["STEP_04"]
+    postconditions: ["PROTOCOL_COMPLETE"]
