@@ -20,6 +20,7 @@ from modules.detection.detector_base import BaseObjectDetector, DetectedObject
 from modules.detection.onnx_detector import ONNXObjectDetector
 from modules.detection.heuristic_detector import HeuristicLabDetector
 from modules.pose.pose_base import BasePoseEstimator, HandPose
+from modules.pose.neural_palm_pose import NeuralPalmPoseEstimator
 from modules.pose.mediapipe_pose import MediaPipePoseEstimator
 from modules.pose.kinematic_pose import KinematicHandTracker
 from modules.calibration.coordinate_normalizer import RackCoordinateNormalizer
@@ -102,16 +103,25 @@ class SutraVisionEngine:
             logger.info(f"Using ONNX Runtime detector with model: {self.config.model_path}")
             return onnx_det
         else:
-            logger.info("Using lightweight HeuristicLabDetector fallback for lab items.")
+            logger.info("Using lightweight HeuristicLabDetector with face-suppression for lab items.")
             return HeuristicLabDetector(min_confidence=self.config.detection_conf_threshold)
 
     def _initialize_pose(self) -> BasePoseEstimator:
+        # Priority 1: Real OpenCV Zoo MediaPipe ONNX Palm Detector
+        neural_palm = NeuralPalmPoseEstimator()
+        if neural_palm.is_operational():
+            logger.info("Using real Deep-Learning NeuralPalmPoseEstimator (OpenCV Zoo MediaPipe ONNX).")
+            return neural_palm
+
+        # Priority 2: MediaPipe package if installed
         if self.config.pose_backend == "mediapipe":
             mp_pose = MediaPipePoseEstimator()
             if mp_pose.is_operational():
                 logger.info("Using MediaPipe Hands pose estimator.")
                 return mp_pose
-        logger.info("Using CPU-first KinematicHandTracker pose estimator.")
+
+        # Priority 3: Kinematic tracker with face masking
+        logger.info("Using CPU-first KinematicHandTracker with Face Suppression.")
         return KinematicHandTracker()
 
     def _initialize_ingestor(self) -> FrameIngestor:
@@ -133,7 +143,6 @@ class SutraVisionEngine:
 
     def _on_camera_disconnect(self) -> None:
         logger.warning("Event dispatched: CAMERA_DISCONNECTED")
-        # Save protocol checkpoint to preserve mission state
         self.protocol_engine.save_checkpoint()
         evt = TelemetryEvent(
             device_id=self.config.device_id,
@@ -147,7 +156,6 @@ class SutraVisionEngine:
 
     def _on_camera_reconnect(self) -> None:
         logger.info("Event dispatched: CAMERA_RECONNECTED")
-        # Restore protocol checkpoint
         self.protocol_engine.restore_checkpoint()
         evt = TelemetryEvent(
             device_id=self.config.device_id,
@@ -168,7 +176,6 @@ class SutraVisionEngine:
         self.ingestor.start()
         logger.info("SUTRA Vision Engine started.")
 
-        # Emit initial system status event
         init_evt = TelemetryEvent(
             device_id=self.config.device_id,
             experiment_id=self.config.experiment_id,
@@ -193,9 +200,7 @@ class SutraVisionEngine:
         logger.info(f"SUTRA Vision Engine stopped. Telemetry exported to {self.config.storage_export_path}")
 
     def process_single_frame(self, ingested_frame: IngestedFrame, annotate: bool = True) -> PipelineResult:
-        """
-        Execute full vision and activity recognition pipeline on a single frame.
-        """
+        """Execute full vision and activity recognition pipeline on a single frame."""
         t0 = time.perf_counter()
         frame = ingested_frame.frame
         ts = ingested_frame.timestamp_wall
@@ -206,17 +211,23 @@ class SutraVisionEngine:
         tracked_objects = self.tracker.update(raw_detections, ts)
         hand_poses = self.pose_estimator.estimate(frame)
 
+        # Eliminate duplicate hand boxes: if hand_poses has hands, filter out generic "hand" objects
+        if hand_poses:
+            filtered_objects = [o for o in tracked_objects if o.class_name != "hand"]
+        else:
+            filtered_objects = tracked_objects
+
         # 2. Hand-Object Interaction (HOI)
         interactions = self.interaction_engine.evaluate(
             hands=hand_poses,
-            objects=tracked_objects,
+            objects=filtered_objects,
             normalizer=self.normalizer,
             timestamp=ts
         )
 
         # 3. Temporal Sequence Reasoning
         temporal_state = self.temporal_engine.push_frame(
-            objects=tracked_objects,
+            objects=filtered_objects,
             hands=hand_poses,
             interactions=interactions,
             timestamp=ts
@@ -226,7 +237,7 @@ class SutraVisionEngine:
         trigger_type, payload = self.protocol_engine.evaluate_step(
             temporal_state=temporal_state,
             interactions=interactions,
-            objects=tracked_objects,
+            objects=filtered_objects,
             timestamp=ts
         )
 
@@ -244,12 +255,11 @@ class SutraVisionEngine:
             }
             evt_type = event_type_map.get(trigger_type, TelemetryEventType.SYSTEM_STATUS)
 
-            # Extract rack coordinates of primary interaction if present
             norm_coord = None
-            if interactions:
+            if interactions and filtered_objects:
                 norm_coord = RackCoordinates(
-                    x=self.normalizer.normalize_point(tracked_objects[0].center[0], tracked_objects[0].center[1]).x if tracked_objects else 0.5,
-                    y=self.normalizer.normalize_point(tracked_objects[0].center[0], tracked_objects[0].center[1]).y if tracked_objects else 0.5,
+                    x=self.normalizer.normalize_point(filtered_objects[0].center[0], filtered_objects[0].center[1]).x,
+                    y=self.normalizer.normalize_point(filtered_objects[0].center[0], filtered_objects[0].center[1]).y,
                     calibration_status="CALIBRATED" if self.normalizer.is_calibrated else "UNAVAILABLE"
                 )
 
@@ -280,7 +290,7 @@ class SutraVisionEngine:
         if annotate:
             annotated = self._render_hud(
                 frame.copy(),
-                tracked_objects,
+                filtered_objects,
                 hand_poses,
                 interactions,
                 temporal_state,
@@ -293,7 +303,7 @@ class SutraVisionEngine:
             timestamp=ts,
             latency_ms=round(elapsed_ms, 2),
             fps=round(ingested_frame.fps_measured, 1),
-            objects=tracked_objects,
+            objects=filtered_objects,
             hands=hand_poses,
             interactions=interactions,
             temporal_state=temporal_state,
@@ -314,45 +324,77 @@ class SutraVisionEngine:
         cur_step,
         latency_ms: float
     ) -> np.ndarray:
-        """Render high-contrast visual HUD on frame for live inspection."""
+        """Render clean, modern HUD on frame with sleek bounding boxes."""
         h, w = frame.shape[:2]
 
-        # 1. Draw Object Boxes
+        # 1. Sleek Object Boxes
         for obj in objects:
             b = obj.bbox
-            cv2.rectangle(frame, (int(b.x1), int(b.y1)), (int(b.x2), int(b.y2)), (0, 255, 128), 2)
-            lbl = f"{obj.class_name} ({obj.confidence:.2f})"
-            cv2.putText(frame, lbl, (int(b.x1), max(18, int(b.y1) - 6)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 128), 1, cv2.LINE_AA)
+            x1, y1, x2, y2 = int(b.x1), int(b.y1), int(b.x2), int(b.y2)
+            
+            # Color based on class: Pipette = Cyan, Vial = Amber, Other = Purple
+            color = (255, 200, 0) if "vial" in obj.class_name else (255, 160, 0) if "pipette" in obj.class_name else (200, 100, 255)
+            
+            # Crisp thin rectangle
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            # Label tag pill
+            lbl = f"{obj.class_name} {obj.confidence:.2f}"
+            t_size = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)[0]
+            cv2.rectangle(frame, (x1, max(0, y1 - 20)), (x1 + t_size[0] + 8, y1), color, -1)
+            cv2.putText(frame, lbl, (x1 + 4, max(14, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 1, cv2.LINE_AA)
 
-        # 2. Draw Hand Landmarks
+        # 2. Sleek Hand Pose (Emerald Green Box + Keypoint Dots)
         for hand in hands:
             b = hand.bbox
-            cv2.rectangle(frame, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (255, 160, 0), 1)
-            cv2.circle(frame, (int(hand.palm_center[0]), int(hand.palm_center[1])), 4, (0, 200, 255), -1)
-            cv2.circle(frame, (int(hand.index_tip[0]), int(hand.index_tip[1])), 4, (0, 0, 255), -1)
-            cv2.circle(frame, (int(hand.thumb_tip[0]), int(hand.thumb_tip[1])), 4, (255, 0, 255), -1)
+            x1, y1, x2, y2 = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+            hand_color = (0, 220, 130)  # Emerald green
 
-        # 3. Top Banner: Current Step & Progress
-        cv2.rectangle(frame, (0, 0), (w, 54), (20, 20, 25), -1)
-        step_text = f"STEP: {cur_step.id if cur_step else 'COMPLETED'} - {cur_step.name if cur_step else 'All Steps Verified'}"
-        cv2.putText(frame, step_text, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+            # Clean corner brackets for modern look
+            corner_len = min(20, (x2 - x1) // 3, (y2 - y1) // 3)
+            # Top-left
+            cv2.line(frame, (x1, y1), (x1 + corner_len, y1), hand_color, 2)
+            cv2.line(frame, (x1, y1), (x1, y1 + corner_len), hand_color, 2)
+            # Top-right
+            cv2.line(frame, (x2, y1), (x2 - corner_len, y1), hand_color, 2)
+            cv2.line(frame, (x2, y1), (x2, y1 + corner_len), hand_color, 2)
+            # Bottom-left
+            cv2.line(frame, (x1, y2), (x1 + corner_len, y2), hand_color, 2)
+            cv2.line(frame, (x1, y2), (x1, y2 - corner_len), hand_color, 2)
+            # Bottom-right
+            cv2.line(frame, (x2, y2), (x2 - corner_len, y2), hand_color, 2)
+            cv2.line(frame, (x2, y2), (x2, y2 - corner_len), hand_color, 2)
+
+            # Label pill
+            h_lbl = f"{hand.handedness} Hand ({hand.confidence:.2f})"
+            t_size = cv2.getTextSize(h_lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)[0]
+            cv2.rectangle(frame, (x1, max(0, y1 - 20)), (x1 + t_size[0] + 8, y1), hand_color, -1)
+            cv2.putText(frame, h_lbl, (x1 + 4, max(14, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 1, cv2.LINE_AA)
+
+            # Keypoint dots
+            cv2.circle(frame, (int(hand.palm_center[0]), int(hand.palm_center[1])), 5, (0, 255, 255), -1)
+            cv2.circle(frame, (int(hand.index_tip[0]), int(hand.index_tip[1])), 5, (0, 100, 255), -1)
+            cv2.circle(frame, (int(hand.thumb_tip[0]), int(hand.thumb_tip[1])), 5, (255, 0, 255), -1)
+
+        # 3. Clean Modern Top Header Banner
+        cv2.rectangle(frame, (0, 0), (w, 52), (15, 20, 25), -1)
+        step_title = f"{cur_step.id if cur_step else 'COMPLETED'}: {cur_step.name if cur_step else 'All Steps Verified'}"
+        cv2.putText(frame, step_title, (14, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1, cv2.LINE_AA)
         
-        act_text = f"Action: {temporal_state.confirmed_activity or 'WAITING'} (Dur: {temporal_state.duration_active:.1f}s)"
+        act_info = f"Action: {temporal_state.confirmed_activity or 'WAITING'} ({temporal_state.duration_active:.1f}s)"
         if temporal_state.is_occluded:
-            act_text += " [OCCLUSION BRIDGED]"
-        cv2.putText(frame, act_text, (12, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (100, 220, 255), 1, cv2.LINE_AA)
+            act_info += " [OCCLUSION TOLERANT]"
+        cv2.putText(frame, act_info, (14, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (120, 220, 255), 1, cv2.LINE_AA)
 
-        # 4. Diagnostics (Latency, RAM)
+        # 4. Diagnostics on Top Right
         ram_mb = psutil.Process().memory_info().rss / (1024 * 1024)
-        diag_text = f"{latency_ms:.1f}ms | RAM: {ram_mb:.0f}MB"
-        cv2.putText(frame, diag_text, (w - 180, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
+        diag_str = f"{latency_ms:.1f}ms | RAM {ram_mb:.0f}MB"
+        cv2.putText(frame, diag_str, (w - 170, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 190, 200), 1, cv2.LINE_AA)
 
-        # 5. Deviation Banner (Red alert overlay if deviation active)
+        # 5. Deviation Banner (Red alert bar)
         if self.protocol_engine.active_deviation:
-            cv2.rectangle(frame, (0, h - 36), (w, h), (0, 0, 180), -1)
+            cv2.rectangle(frame, (0, h - 36), (w, h), (0, 0, 200), -1)
             dev_text = f"ALERT: {self.protocol_engine.active_deviation.get('description', 'Deviation Detected')}"
-            cv2.putText(frame, dev_text, (12, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, dev_text, (14, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
 
         return frame
 
@@ -381,4 +423,3 @@ class SutraVisionEngine:
             "telemetry": storage_stats,
             "publisher": pub_stats
         }
-

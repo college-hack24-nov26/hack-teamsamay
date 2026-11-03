@@ -1,7 +1,7 @@
 """
 Real-Time Browser-Based Live Video HUD for SUTRA Vision Engine.
-Provides high-performance, smooth frame streaming via HTML5 Canvas and MJPEG fallback.
-Works 100% reliably in Chrome, Edge, Firefox, and mobile browsers without broken image bugs.
+Provides high-performance, smooth frame streaming via HTML5 Canvas with modern White/Light theme,
+theme toggle (Light/Dark), snapshot capture, and instant operator controls.
 """
 
 import asyncio
@@ -39,161 +39,274 @@ HTML_DASHBOARD = """
   <meta charset="UTF-8">
   <title>SUTRA AI - On-Board BAS Experiment Guardian</title>
   <style>
+    :root {
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --primary: #2563eb;
+      --success: #10b981;
+      --danger: #ef4444;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+    }
+    body.dark {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #38bdf8;
+      --success: #34d399;
+      --danger: #f87171;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: #0d1117;
-      color: #c9d1d9;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      padding: 16px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding: 18px 24px;
+      transition: background 0.3s ease, color 0.3s ease;
     }
     header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding-bottom: 12px;
-      border-bottom: 1px solid #30363d;
-      margin-bottom: 16px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
     }
-    h1 { font-size: 20px; color: #58a6ff; }
+    .brand-title {
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--primary);
+      letter-spacing: -0.5px;
+    }
+    .brand-subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
     .badge {
-      background: #238636;
-      color: #fff;
-      padding: 4px 8px;
-      border-radius: 12px;
+      background: var(--success);
+      color: #ffffff;
+      padding: 5px 12px;
+      border-radius: 20px;
       font-size: 12px;
-      font-weight: bold;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 2px 4px rgba(16, 185, 129, 0.2);
+    }
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      background: #ffffff;
+      border-radius: 50%;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+      100% { opacity: 1; transform: scale(1); }
     }
     .container {
       display: grid;
-      grid-template-columns: 2fr 1fr;
-      gap: 16px;
+      grid-template-columns: 2.2fr 1fr;
+      gap: 20px;
     }
-    @media (max-width: 900px) {
+    @media (max-width: 960px) {
       .container { grid-template-columns: 1fr; }
     }
     .video-card, .sidebar-card {
-      background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      padding: 12px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+      transition: background 0.3s ease, border-color 0.3s ease;
     }
     .video-container {
       position: relative;
       width: 100%;
       background: #000;
-      border-radius: 6px;
+      border-radius: 8px;
       overflow: hidden;
       display: flex;
       justify-content: center;
       align-items: center;
-      min-height: 420px;
+      min-height: 440px;
+      border: 1px solid var(--border);
     }
     #video-canvas {
       width: 100%;
       height: auto;
-      max-height: 520px;
+      max-height: 540px;
       object-fit: contain;
       display: block;
-      border-radius: 4px;
+      border-radius: 6px;
     }
     .hud-controls {
       display: flex;
       gap: 10px;
-      margin-top: 12px;
+      margin-top: 14px;
       align-items: center;
+      flex-wrap: wrap;
     }
     button {
-      background: #21262d;
-      color: #c9d1d9;
-      border: 1px solid #30363d;
-      padding: 8px 16px;
-      border-radius: 6px;
+      background: var(--card-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 9px 16px;
+      border-radius: 8px;
       cursor: pointer;
-      font-weight: bold;
-      transition: background 0.2s;
-    }
-    button:hover { background: #30363d; }
-    button.alert-btn { background: #da3633; color: white; border: none; }
-    button.alert-btn:hover { background: #b62324; }
-    .event-log {
-      max-height: 480px;
-      overflow-y: auto;
-      font-family: monospace;
-      font-size: 12px;
+      font-weight: 600;
+      font-size: 13px;
+      transition: all 0.2s ease;
       display: flex;
-      flex-direction: column-reverse;
-      gap: 8px;
+      align-items: center;
+      gap: 6px;
     }
-    .event-item {
-      background: #0d1117;
-      border-left: 3px solid #58a6ff;
-      padding: 8px;
-      border-radius: 4px;
+    button:hover {
+      background: var(--border);
+      transform: translateY(-1px);
     }
-    .event-item.DEVIATION_DETECTED {
-      border-left-color: #f85149;
-      background: #220808;
+    button.primary-btn {
+      background: var(--primary);
+      color: #ffffff;
+      border: none;
     }
-    .event-item.STEP_COMPLETED {
-      border-left-color: #2ea043;
+    button.primary-btn:hover {
+      filter: brightness(1.1);
+    }
+    button.alert-btn {
+      background: var(--danger);
+      color: #ffffff;
+      border: none;
+    }
+    button.alert-btn:hover {
+      filter: brightness(1.15);
     }
     .metric-row {
       display: flex;
       justify-content: space-between;
-      margin-bottom: 8px;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
       font-size: 13px;
     }
-    .metric-val { color: #58a6ff; font-weight: bold; }
-    #connection-indicator {
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: #2ea043;
-      margin-right: 6px;
+    .metric-row:last-child {
+      border-bottom: none;
+    }
+    .metric-val {
+      color: var(--primary);
+      font-weight: 700;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    .event-log {
+      max-height: 420px;
+      overflow-y: auto;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      font-size: 12px;
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 8px;
+      margin-top: 12px;
+      padding-right: 4px;
+    }
+    .event-item {
+      background: var(--bg);
+      border-left: 4px solid var(--primary);
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      border-left-width: 4px;
+      transition: all 0.2s ease;
+    }
+    .event-item.DEVIATION_DETECTED {
+      border-left-color: var(--danger);
+      background: rgba(239, 68, 68, 0.08);
+    }
+    .event-item.STEP_COMPLETED {
+      border-left-color: var(--success);
+      background: rgba(16, 185, 129, 0.08);
+    }
+    .card-heading {
+      font-size: 15px;
+      font-weight: 700;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
   </style>
 </head>
 <body>
   <header>
     <div>
-      <h1>SUTRA - AI Human Activity Recognition (SIH26174)</h1>
-      <small style="color: #8b949e">Autonomous Edge Guardian for Bharatiya Antariksh Station (BAS)</small>
+      <div class="brand-title">SUTRA AI - On-Board Experiment Guardian</div>
+      <div class="brand-subtitle">Smart India Hackathon 2026 (SIH26174) &bull; Bharatiya Antariksh Station</div>
     </div>
-    <div>
-      <span class="badge" id="status-badge"><span id="connection-indicator"></span>LIVE EDGE STREAM</span>
+    <div class="header-actions">
+      <button onclick="toggleTheme()" id="theme-btn">🌙 Dark Mode</button>
+      <div class="badge" id="status-badge">
+        <span class="pulse-dot"></span>
+        <span>EDGE ACTIVE</span>
+      </div>
     </div>
   </header>
 
   <div class="container">
+    <!-- Left: Video Stream & Main Controls -->
     <div class="video-card">
       <div class="video-container">
         <canvas id="video-canvas" width="640" height="480"></canvas>
       </div>
       <div class="hud-controls">
-        <button onclick="ackDeviation()" class="alert-btn">Acknowledge Deviation</button>
-        <button onclick="fetchEvents()">Refresh Logs</button>
-        <span id="fps-label" style="margin-left: auto; font-size: 13px; color: #8b949e">Streaming: Active</span>
+        <button onclick="ackDeviation()" class="alert-btn">&#x2714; Acknowledge Deviation</button>
+        <button onclick="downloadSnapshot()">&#128247; Save Snapshot</button>
+        <button onclick="fetchEvents()">&#8635; Refresh</button>
+        <span id="fps-label" style="margin-left: auto; font-size: 13px; font-weight: 600; color: var(--text-muted)">Live Feed: 30 FPS</span>
       </div>
     </div>
 
+    <!-- Right: Telemetry & Diagnostic Metrics -->
     <div class="sidebar-card">
-      <h3 style="margin-bottom: 12px; font-size: 15px; border-bottom: 1px solid #30363d; padding-bottom: 6px;">Live Telemetry Events</h3>
+      <div class="card-heading">
+        <span>Real-Time Diagnostics</span>
+        <small style="color: var(--text-muted); font-size: 11px;">CPU-First</small>
+      </div>
+      
       <div class="metric-row">
-        <span>Latency P95:</span>
+        <span>Inference Latency (P95):</span>
         <span class="metric-val" id="p95-val">-- ms</span>
       </div>
       <div class="metric-row">
-        <span>Memory RSS:</span>
+        <span>Memory Usage (RSS):</span>
         <span class="metric-val" id="ram-val">-- MB</span>
       </div>
       <div class="metric-row">
-        <span>Active Step:</span>
-        <span class="metric-val" id="step-val">STEP_01</span>
+        <span>Active Protocol Step:</span>
+        <span class="metric-val" id="step-val" style="color: var(--primary);">STEP_01</span>
+      </div>
+
+      <div class="card-heading" style="margin-top: 14px;">
+        <span>Telemetry State Events</span>
+        <small id="event-count-badge" style="color: var(--primary); font-weight: bold;">0 logged</small>
       </div>
 
       <div class="event-log" id="event-log">
-        <div class="event-item">Awaiting live events...</div>
+        <div class="event-item">Awaiting real-time events...</div>
       </div>
     </div>
   </div>
@@ -228,18 +341,29 @@ HTML_DASHBOARD = """
       isFetching = false;
     };
 
-    // Ultra-reliable continuous frame render loop
     function scheduleNextFrame() {
       if (!isFetching) {
         isFetching = true;
         img.src = '/api/frame?t=' + Date.now();
       }
-      setTimeout(scheduleNextFrame, 33); // ~30 FPS polling
+      setTimeout(scheduleNextFrame, 33);
     }
     scheduleNextFrame();
 
     async function ackDeviation() {
       await fetch('/api/acknowledge', { method: 'POST' });
+    }
+
+    function downloadSnapshot() {
+      const link = document.createElement('a');
+      link.download = 'sutra_snapshot_' + Date.now() + '.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    function toggleTheme() {
+      const isDark = document.body.classList.toggle('dark');
+      document.getElementById('theme-btn').innerText = isDark ? '☀️ Light Mode' : '🌙 Dark Mode';
     }
 
     async function fetchEvents() {
@@ -249,11 +373,12 @@ HTML_DASHBOARD = """
         const container = document.getElementById('event-log');
         if (data.events && data.events.length > 0) {
           container.innerHTML = '';
+          document.getElementById('event-count-badge').innerText = data.events.length + ' logged';
           data.events.slice(-15).reverse().forEach(evt => {
             const div = document.createElement('div');
             div.className = 'event-item ' + evt.event_type;
             const timeStr = evt.timestamp.includes('T') ? evt.timestamp.split('T')[1].split('.')[0] : evt.timestamp;
-            div.innerHTML = `<strong>[${evt.event_type}]</strong> ${evt.step_name || evt.step_id || ''}<br><span style="color:#8b949e">${timeStr}</span> - Conf: ${evt.confidence}`;
+            div.innerHTML = `<strong>[${evt.event_type}]</strong> ${evt.step_name || evt.step_id || ''}<br><span style="color:var(--text-muted)">${timeStr}</span> &bull; Conf: ${evt.confidence}`;
             container.appendChild(div);
           });
         }
@@ -293,9 +418,8 @@ def get_current_frame():
                 "Expires": "0"
             }
         )
-    # Placeholder frame if none ready yet
-    blank = np.full((480, 640, 3), 30, dtype=np.uint8)
-    cv2.putText(blank, "INITIALIZING CAMERA...", (160, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 128), 2)
+    blank = np.full((480, 640, 3), 240, dtype=np.uint8)
+    cv2.putText(blank, "INITIALIZING CAMERA FEED...", (140, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (40, 40, 40), 2)
     ret, buf = cv2.imencode(".jpg", blank)
     return Response(content=buf.tobytes(), media_type="image/jpeg")
 
@@ -311,7 +435,7 @@ def generate_mjpeg_stream():
                 b"Content-Length: " + str(len(latest_annotated_jpeg)).encode() + b"\r\n\r\n"
                 + latest_annotated_jpeg + b"\r\n"
             )
-        time.sleep(0.04)  # ~25 FPS stream rate
+        time.sleep(0.04)
 
 
 @app.get("/video_feed")
@@ -365,7 +489,7 @@ def start_web_server(engine: SutraVisionEngine, host: str = "127.0.0.1", port: i
 
                 res = engine.process_single_frame(ingested, annotate=True)
                 if res.annotated_frame is not None:
-                    ret, buf = cv2.imencode(".jpg", res.annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    ret, buf = cv2.imencode(".jpg", res.annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     if ret:
                         latest_annotated_jpeg = buf.tobytes()
             except Exception as e:

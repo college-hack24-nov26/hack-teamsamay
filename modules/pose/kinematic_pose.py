@@ -1,9 +1,11 @@
 """
 CPU-First Kinematic Hand Tracker for SUTRA Vision Engine.
-Uses OpenCV contour geometry, convex hull analysis, and human anatomical
-kinematic proportions to reconstruct 21 hand keypoints without heavy neural network overhead.
+Includes face suppression to prevent facial features from being mistaken for hands.
+Extracts wrist, palm, fingertips and 21 anatomical keypoints along kinematic chains.
 """
 
+import os
+from pathlib import Path
 from typing import Optional
 import cv2
 import numpy as np
@@ -13,12 +15,22 @@ from modules.pose.pose_base import BasePoseEstimator, HandPose, HandKeypoint, HA
 
 class KinematicHandTracker(BasePoseEstimator):
     """
-    Self-contained, CPU-optimized hand pose estimator.
-    Extracts wrist, palm, fingertips and full 21 keypoints structure.
+    CPU-optimized hand pose estimator with facial masking.
     """
 
-    def __init__(self, min_hand_area_pct: float = 0.015):
+    def __init__(self, min_hand_area_pct: float = 0.015, face_cascade_path: Optional[str] = None):
         self.min_hand_area_pct = min_hand_area_pct
+
+        if face_cascade_path is None:
+            base_dir = Path(__file__).resolve().parent.parent.parent
+            face_cascade_path = str(base_dir / "models" / "haarcascade_frontalface_default.xml")
+
+        self.face_cascade = None
+        if os.path.isfile(face_cascade_path):
+            try:
+                self.face_cascade = cv2.CascadeClassifier(face_cascade_path)
+            except Exception:
+                self.face_cascade = None
 
     def is_operational(self) -> bool:
         return True
@@ -29,12 +41,32 @@ class KinematicHandTracker(BasePoseEstimator):
 
         h, w = frame.shape[:2]
         min_area = w * h * self.min_hand_area_pct
+        max_area = w * h * 0.40
 
-        # Skin tone segmentation in YCrCb color space (more illumination-resilient than RGB)
+        # Detect face to mask out
+        face_boxes = []
+        if self.face_cascade is not None and not self.face_cascade.empty():
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=4, minSize=(60, 60))
+            for (fx, fy, fw, fh) in faces:
+                face_boxes.append((fx, fy, fw, fh))
+
+        # Skin tone segmentation in YCrCb color space
         ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
         lower_skin = np.array([0, 133, 77], dtype=np.uint8)
         upper_skin = np.array([255, 173, 127], dtype=np.uint8)
         mask = cv2.inRange(ycrcb, lower_skin, upper_skin)
+
+        # Mask out face region completely
+        for (fx, fy, fw, fh) in face_boxes:
+            pad_w = int(fw * 0.25)
+            pad_h = int(fh * 0.35)
+            cv2.rectangle(
+                mask,
+                (max(0, fx - pad_w), max(0, fy - pad_h)),
+                (min(w, fx + fw + pad_w), min(h, fy + fh + int(pad_h * 1.5))),
+                0, -1
+            )
 
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
@@ -45,44 +77,35 @@ class KinematicHandTracker(BasePoseEstimator):
 
         for c in contours:
             area = cv2.contourArea(c)
-            if area < min_area:
+            if area < min_area or area > max_area:
                 continue
 
-            # Bounding box
             bx, by, bw, bh = cv2.boundingRect(c)
+            aspect = bh / float(bw) if bw > 0 else 1.0
+            if aspect > 3.5 or aspect < 0.25:
+                continue
+
             x1, y1 = float(bx), float(by)
             x2, y2 = float(bx + bw), float(by + bh)
 
-            # Centroid (Moments)
             m = cv2.moments(c)
             if m["m00"] == 0:
                 continue
             cx = float(m["m10"] / m["m00"])
             cy = float(m["m01"] / m["m00"])
 
-            # Find extreme points
             hull = cv2.convexHull(c, returnPoints=True)
-            topmost = tuple(c[c[:, :, 1].argmin()][0])
-            bottommost = tuple(c[c[:, :, 1].argmax()][0])
-            leftmost = tuple(c[c[:, :, 0].argmin()][0])
-            rightmost = tuple(c[c[:, :, 0].argmax()][0])
-
-            # In typical frontal view, bottommost edge represents the wrist
             wrist = (float(cx), float(y2))
             palm_center = (cx, cy)
 
-            # Convex hull tips (fingertip candidates)
             tips = []
             for pt in hull:
                 px, py = float(pt[0][0]), float(pt[0][1])
-                # Fingertips are typically higher than the palm center
                 if py < cy:
                     tips.append((px, py))
 
-            # Sort tips horizontally
             tips = sorted(tips, key=lambda p: p[0])
             if len(tips) >= 2:
-                # Leftmost is thumb or pinky depending on hand orientation
                 thumb_tip = tips[0]
                 index_tip = tips[min(1, len(tips) - 1)]
             elif len(tips) == 1:
@@ -92,12 +115,9 @@ class KinematicHandTracker(BasePoseEstimator):
                 index_tip = (cx, y1)
                 thumb_tip = (cx - bw * 0.2, cy)
 
-            # Reconstruct 21 anatomical landmarks along kinematic chains
             keypoints: list[HandKeypoint] = []
-            # 0: Wrist
             keypoints.append(HandKeypoint(id=0, name="WRIST", x=wrist[0], y=wrist[1]))
 
-            # Finger chains: Thumb(1-4), Index(5-8), Middle(9-12), Ring(13-16), Pinky(17-20)
             finger_targets = [
                 thumb_tip,
                 index_tip,
@@ -124,7 +144,6 @@ class KinematicHandTracker(BasePoseEstimator):
                     ))
                     kp_id += 1
 
-            # Determine handedness based on relative thumb position
             handedness = "Right" if thumb_tip[0] < index_tip[0] else "Left"
 
             poses.append(HandPose(
@@ -139,4 +158,3 @@ class KinematicHandTracker(BasePoseEstimator):
             ))
 
         return poses
-
