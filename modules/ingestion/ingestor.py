@@ -95,6 +95,15 @@ class FrameIngestor:
             self._is_connected = False
         logger.info("FrameIngestor stopped.")
 
+    def switch_source(self, new_source: Union[int, str, Callable[[], Optional[np.ndarray]]]) -> None:
+        """Switch video source at runtime without stopping background pipeline."""
+        with self._lock:
+            self.source = new_source
+            self._source_type = self._determine_source_type()
+            self._is_connected = False
+        self._release_capture()
+        logger.info(f"FrameIngestor video source switched to: {new_source} ({self._source_type})")
+
     def simulate_hardware_disconnect(self, simulate: bool = True) -> None:
         """Test hook to simulate camera drops or signal loss."""
         self._simulate_failure = simulate

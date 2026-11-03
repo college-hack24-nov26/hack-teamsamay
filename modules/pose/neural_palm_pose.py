@@ -156,3 +156,4 @@ class NeuralPalmPoseEstimator(BasePoseEstimator):
             ))
 
         return poses
+
