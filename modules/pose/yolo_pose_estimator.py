@@ -160,3 +160,4 @@ class YOLOPoseEstimator(BasePoseEstimator):
                 ))
 
         return hands
+

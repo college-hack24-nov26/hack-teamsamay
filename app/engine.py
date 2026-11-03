@@ -344,21 +344,32 @@ class SutraVisionEngine:
         """Render clean, modern HUD on frame with sleek bounding boxes."""
         h, w = frame.shape[:2]
 
-        # 1. Sleek Object Boxes
+        # 1. Sleek Object Boxes (Astronaut: Green, Tool: Blue, Sample: Orange)
         for obj in objects:
             b = obj.bbox
             x1, y1, x2, y2 = int(b.x1), int(b.y1), int(b.x2), int(b.y2)
-            
-            # Color based on class: Pipette = Cyan, Vial = Amber, Other = Purple
-            color = (255, 200, 0) if "vial" in obj.class_name else (255, 160, 0) if "pipette" in obj.class_name else (200, 100, 255)
-            
-            # Crisp thin rectangle
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            # Label tag pill
-            lbl = f"{obj.class_name} {obj.confidence:.2f}"
-            t_size = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)[0]
-            cv2.rectangle(frame, (x1, max(0, y1 - 20)), (x1 + t_size[0] + 8, y1), color, -1)
-            cv2.putText(frame, lbl, (x1 + 4, max(14, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 1, cv2.LINE_AA)
+
+            if obj.class_name == "person":
+                display_label = "Astronaut"
+                color = (40, 185, 90)      # Green (BGR)
+            elif obj.class_name in ["pipette", "tool", "forceps", "sampling_tool"]:
+                display_label = "Tool"
+                color = (235, 110, 35)     # Deep Blue (BGR)
+            else:
+                display_label = "Sample"
+                color = (20, 145, 245)     # Amber/Orange (BGR)
+
+            # Solid 3px bounding box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+            # Solid pill header
+            lbl = f"{display_label}"
+            t_size = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 2)[0]
+            tag_w = t_size[0] + 16
+            tag_h = 24
+            tag_x1 = max(x1, min(w - tag_w, (x1 + x2 - tag_w) // 2))
+            tag_y1 = max(0, y1 - tag_h)
+            cv2.rectangle(frame, (tag_x1, tag_y1), (tag_x1 + tag_w, tag_y1 + tag_h), color, -1)
+            cv2.putText(frame, lbl, (tag_x1 + 8, tag_y1 + 17), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2, cv2.LINE_AA)
 
         # 2. Sleek Hand Pose (Emerald Green Box + Keypoint Dots)
         for hand in hands:

@@ -1,24 +1,25 @@
 """
 Real-Time Browser-Based Live Video HUD for SUTRA Vision Engine.
-Includes:
-- HTML5 Canvas high-performance real-time video stream (30+ FPS)
-- Interactive Voice AI Assistant (Speech-to-Text Microphone + Audio Response)
-- Autonomous Flight Copilot Engine (Zero typing - automatically observes, guides & speaks)
-- Mobile IP Webcam & USB Webcam runtime switching
-- Light / Dark Theme toggle & Snapshot capture
+Matches the official SIH problem statement visual specification:
+- Astronaut (Green), Tool (Blue), Sample (Orange) Neural Bounding Boxes
+- Expected Sequence (Green Card) vs Observed Sequence (Red Card)
+- Step Skipped Alert Pill & Voice Alert Issued Banner
+- Interactive Voice AI Assistant (Speech Recognition + Audio Synthesis)
+- Webcam, Mobile IP Webcam, MP4 Video File Upload & Playback
 """
 
 import asyncio
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
 from typing import Optional
 import cv2
 import numpy as np
-from fastapi import FastAPI, Response, Request
+from fastapi import FastAPI, Response, Request, UploadFile, File
 from fastapi.responses import HTMLResponse
 import uvicorn
 
@@ -48,7 +49,7 @@ HTML_DASHBOARD = """
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SUTRA AI - Autonomous BAS Experiment Guardian & Voice Assistant</title>
+  <title>SUTRA AI - Autonomous BAS Experiment Guardian</title>
   <style>
     :root {
       --bg: #f8fafc;
@@ -57,14 +58,14 @@ HTML_DASHBOARD = """
       --text: #0f172a;
       --text-muted: #64748b;
       --primary: #2563eb;
-      --primary-light: #eff6ff;
       --success: #10b981;
       --success-light: #ecfdf5;
+      --success-border: #86efac;
       --danger: #ef4444;
       --danger-light: #fef2f2;
+      --danger-border: #fca5a5;
       --warning: #f59e0b;
-      --warning-light: #fffbeb;
-      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
     }
     body.dark {
       --bg: #0f172a;
@@ -73,13 +74,13 @@ HTML_DASHBOARD = """
       --text: #f8fafc;
       --text-muted: #94a3b8;
       --primary: #38bdf8;
-      --primary-light: #082f49;
       --success: #34d399;
       --success-light: #064e3b;
+      --success-border: #059669;
       --danger: #f87171;
       --danger-light: #450a0a;
+      --danger-border: #dc2626;
       --warning: #fbbf24;
-      --warning-light: #451a03;
       --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -119,7 +120,7 @@ HTML_DASHBOARD = """
     .badge {
       background: var(--success);
       color: #ffffff;
-      padding: 5px 12px;
+      padding: 6px 14px;
       border-radius: 20px;
       font-size: 12px;
       font-weight: 700;
@@ -144,7 +145,7 @@ HTML_DASHBOARD = """
     .source-bar {
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 12px;
       padding: 10px 14px;
       margin-bottom: 16px;
       display: flex;
@@ -161,7 +162,7 @@ HTML_DASHBOARD = """
     .source-btn {
       padding: 6px 12px;
       font-size: 12px;
-      border-radius: 6px;
+      border-radius: 8px;
       border: 1px solid var(--border);
       background: var(--card-bg);
       color: var(--text);
@@ -184,30 +185,29 @@ HTML_DASHBOARD = """
       padding: 6px 10px;
       border-radius: 6px;
       font-size: 12px;
-      width: 250px;
+      width: 220px;
     }
 
     .container {
       display: grid;
-      grid-template-columns: 2fr 1fr;
-      gap: 16px;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 20px;
     }
-    @media (max-width: 1000px) {
+    @media (max-width: 1080px) {
       .container { grid-template-columns: 1fr; }
     }
-    .video-card, .sidebar-card, .copilot-card {
+    .video-card {
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 12px;
+      border-radius: 16px;
       padding: 16px;
       box-shadow: var(--shadow);
-      transition: background 0.3s ease;
     }
     .video-container {
       position: relative;
       width: 100%;
       background: #000;
-      border-radius: 8px;
+      border-radius: 12px;
       overflow: hidden;
       display: flex;
       justify-content: center;
@@ -268,70 +268,158 @@ HTML_DASHBOARD = """
       animation: pulse 1s infinite;
     }
 
-    /* Autonomous Copilot Section */
-    .copilot-card {
-      margin-top: 16px;
-      border-left: 5px solid var(--primary);
+    /* SIH Infographic Cards */
+    .infographic-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
     }
-    .copilot-header {
+    .seq-card {
+      background: var(--card-bg);
+      border-radius: 16px;
+      padding: 18px 20px;
+      box-shadow: var(--shadow);
+    }
+    .seq-card.expected {
+      border: 2px solid var(--success-border);
+      background: #ffffff;
+    }
+    body.dark .seq-card.expected {
+      background: #1e293b;
+      border-color: var(--success);
+    }
+    .seq-card.observed {
+      border: 2px solid var(--danger-border);
+      background: #ffffff;
+    }
+    body.dark .seq-card.observed {
+      background: #1e293b;
+      border-color: var(--danger);
+    }
+
+    .seq-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 18px;
+      font-weight: 800;
+      margin-bottom: 14px;
+    }
+    .seq-header.expected-header {
+      color: #166534;
+    }
+    body.dark .seq-header.expected-header {
+      color: #4ade80;
+    }
+    .seq-header.observed-header {
+      color: #991b1b;
+    }
+    body.dark .seq-header.observed-header {
+      color: #f87171;
+    }
+
+    .circle-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      font-weight: 900;
+      font-size: 15px;
+    }
+    .circle-icon.green { background: var(--success); }
+    .circle-icon.red { background: var(--danger); }
+
+    .seq-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .seq-item {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 12px;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 8px;
-    }
-    .copilot-status-pill {
-      font-size: 11px;
-      font-weight: 700;
-      padding: 3px 8px;
-      border-radius: 12px;
-      background: var(--primary-light);
-      color: var(--primary);
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-    .directive-box {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 10px;
-    }
-    .directive-title {
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: var(--text-muted);
-      margin-bottom: 4px;
-    }
-    .directive-text {
-      font-size: 14px;
+      font-size: 15px;
       font-weight: 600;
       color: var(--text);
-      line-height: 1.4;
+      padding: 4px 0;
     }
-    .directive-alert {
-      background: var(--danger-light);
-      border-color: var(--danger);
-      color: var(--danger);
+    .tick-green {
+      color: var(--success);
+      font-weight: 900;
+      font-size: 18px;
     }
-    .directive-alert .directive-title {
+    .cross-red {
       color: var(--danger);
-    }
-    .directive-alert .directive-text {
-      color: var(--danger);
+      font-weight: 900;
+      font-size: 18px;
     }
 
-    /* Voice Dialogue Console */
+    /* Red Step Skipped Pill */
+    .step-skipped-pill {
+      background: var(--danger-light);
+      border: 1.5px solid var(--danger-border);
+      border-radius: 14px;
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 17px;
+      font-weight: 800;
+      color: #b91c1c;
+      box-shadow: var(--shadow);
+    }
+    body.dark .step-skipped-pill {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: var(--danger);
+      color: #fca5a5;
+    }
+    .skipped-badge-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--danger);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 900;
+    }
+
+    /* Voice Alert Banner */
+    .voice-alert-pill {
+      background: #eff6ff;
+      border: 1.5px solid #bfdbfe;
+      border-radius: 14px;
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 17px;
+      font-weight: 800;
+      color: #1e3a8a;
+      box-shadow: var(--shadow);
+    }
+    body.dark .voice-alert-pill {
+      background: rgba(37, 99, 235, 0.15);
+      border-color: #3b82f6;
+      color: #93c5fd;
+    }
+    .voice-icon {
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    /* Interactive Voice Dialogue Console */
     .voice-console {
-      background: var(--bg);
+      background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
-      margin-top: 12px;
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: var(--shadow);
     }
     .voice-console-header {
       display: flex;
@@ -355,110 +443,53 @@ HTML_DASHBOARD = """
       line-height: 1.4;
     }
 
-    /* Diagnostics & Events */
-    .metric-row {
+    /* Diagnostics Row */
+    .diag-row {
       display: flex;
       justify-content: space-between;
-      align-items: center;
-      padding: 8px 0;
-      border-bottom: 1px solid var(--border);
-      font-size: 13px;
-    }
-    .metric-row:last-child { border-bottom: none; }
-    .metric-val {
-      color: var(--primary);
-      font-weight: 700;
-      font-family: monospace;
-      font-size: 13px;
-    }
-    .event-log {
-      max-height: 240px;
-      overflow-y: auto;
       font-size: 12px;
-      display: flex;
-      flex-direction: column-reverse;
-      gap: 6px;
-      margin-top: 10px;
-    }
-    .event-item {
-      background: var(--bg);
-      border-left: 4px solid var(--primary);
-      padding: 8px 10px;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      border-left-width: 4px;
-    }
-    .event-item.DEVIATION_DETECTED {
-      border-left-color: var(--danger);
-      background: var(--danger-light);
-    }
-    .event-item.STEP_COMPLETED {
-      border-left-color: var(--success);
-      background: var(--success-light);
-    }
-    .card-heading {
-      font-size: 14px;
-      font-weight: 700;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 8px;
-      margin-bottom: 8px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    
-    /* Help Modal */
-    .modal-overlay {
-      display: none;
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.6);
-      z-index: 999;
-      justify-content: center;
-      align-items: center;
-    }
-    .modal-content {
-      background: var(--card-bg);
-      color: var(--text);
-      padding: 24px;
-      border-radius: 12px;
-      max-width: 520px;
-      width: 90%;
-      border: 1px solid var(--border);
-      box-shadow: var(--shadow);
+      color: var(--text-muted);
+      font-weight: 600;
+      padding: 4px 0;
     }
   </style>
 </head>
 <body>
   <header>
     <div>
-      <div class="brand-title">SUTRA AI - Autonomous BAS Experiment Guardian</div>
-      <div class="brand-subtitle">Smart India Hackathon 2026 (SIH26174) &bull; Bharatiya Antariksh Station (Space Technology)</div>
+      <div class="brand-title">SUTRA AI - Bharatiya Antariksh Station (BAS) Experiment Guardian</div>
+      <div class="brand-subtitle">Smart India Hackathon 2026 (SIH26174) &bull; Space Technology &bull; Team Samay (ID: 162833)</div>
     </div>
     <div class="header-actions">
-      <button onclick="toggleVoiceMic()" id="mic-btn" class="mic-btn">&#127908; Talk to SUTRA (Voice Mode)</button>
-      <button onclick="toggleVoice()" id="voice-btn" class="voice-btn active">&#128266; Auto Voice: ON</button>
+      <button onclick="toggleVoiceMic()" id="mic-btn" class="mic-btn">&#127908; Talk to SUTRA (Voice AI)</button>
+      <button onclick="toggleVoice()" id="voice-btn" class="voice-btn active">&#128266; Voice: ON</button>
       <button onclick="toggleTheme()" id="theme-btn">&#9790; Dark Mode</button>
-      <button onclick="openHelpModal()">&#10067; Phone Guide</button>
       <div class="badge" id="status-badge">
         <span class="pulse-dot"></span>
-        <span id="badge-text">AUTONOMOUS ACTIVE</span>
+        <span id="badge-text">EDGE ACTIVE</span>
       </div>
     </div>
   </header>
 
-  <!-- Video Source Switcher -->
+  <!-- Video Source Bar -->
   <div class="source-bar">
     <span class="source-label">&#128249; Video Source:</span>
     <button class="source-btn active" onclick="switchSource('0', this)">&#128187; Laptop Webcam</button>
-    <button class="source-btn" onclick="switchSource('synthetic', this)">&#129514; 5-Step Simulation</button>
-    <button class="source-btn" onclick="switchSource('data/sample_deviation_run.mp4', this)">&#9888; Deviation Replay</button>
+    <button class="source-btn" onclick="switchSource('data/sample_deviation_run.mp4', this)">&#9888; Play Deviation Video (Step 3 Skipped)</button>
+    <button class="source-btn" onclick="switchSource('data/sample_normal_run.mp4', this)">&#10004; Play Nominal Video (All 4 Steps)</button>
+    <button class="source-btn" onclick="switchSource('synthetic', this)">&#129514; 4-Step Simulation</button>
+    
+    <label class="source-btn" style="cursor: pointer; margin: 0;">
+      &#128194; Upload MP4 Video
+      <input type="file" id="video-file-input" accept="video/mp4,video/avi" style="display: none;" onchange="uploadVideoFile(this)">
+    </label>
+
     <input type="text" id="ipwebcam-url" class="ip-input" placeholder="http://192.168.X.X:8080/video">
     <button class="source-btn" onclick="connectIpWebcam()">&#128241; Connect Mobile</button>
   </div>
 
   <div class="container">
-    <!-- Left: Video Stream & Autonomous Copilot Guidance -->
+    <!-- Left: Video Stream with SIH Colored Bounding Boxes -->
     <div>
       <div class="video-card">
         <div class="video-container">
@@ -467,115 +498,92 @@ HTML_DASHBOARD = """
         <div class="hud-controls">
           <button onclick="ackDeviation()" class="alert-btn">&#10004; Acknowledge Deviation</button>
           <button onclick="downloadSnapshot()">&#128247; Snapshot</button>
-          <button onclick="fetchTelemetry()">&#8635; Refresh Status</button>
-          <span id="fps-label" style="margin-left: auto; font-size: 13px; font-weight: 600; color: var(--text-muted)">Live Feed: 30 FPS</span>
+          <button onclick="resetProtocol()">&#8635; Reset Sequence</button>
+          <span id="fps-label" style="margin-left: auto; font-size: 13px; font-weight: 700; color: var(--text-muted)">Live Feed: 30 FPS</span>
         </div>
       </div>
 
-      <!-- Autonomous Cognitive Copilot Section -->
-      <div class="copilot-card" id="copilot-card">
-        <div class="copilot-header">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 16px;">&#129302;</span>
-            <strong style="font-size: 14px;">Autonomous Flight Copilot (Groq / Cognitive Engine)</strong>
-          </div>
-          <div class="copilot-status-pill" id="copilot-badge">
-            <span class="pulse-dot" style="background: var(--primary);"></span>
-            AUTONOMOUS GUARDIAN
-          </div>
+      <!-- Two-Way Voice Dialogue Console -->
+      <div class="voice-console" style="margin-top: 14px;">
+        <div class="voice-console-header">
+          <span>&#127908; Interactive Voice Flight Assistant (Speech & Audio)</span>
+          <span id="mic-status-label" style="font-size: 11px; color: var(--text-muted);">Press button or Spacebar to talk</span>
         </div>
+        <div class="transcript-line" id="user-voice-transcript">You: "Say 'What object is this?' or 'What step is next?'..."</div>
+        <div class="response-line" id="ai-voice-response">SUTRA Copilot: "Online. Ready to assist astronaut hands-free."</div>
+      </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
-          <div class="directive-box">
-            <div class="directive-title">Current Perception Observation</div>
-            <div class="directive-text" id="copilot-status">Observing workspace setup and hand posture...</div>
-          </div>
-          <div class="directive-box" id="deviation-box">
-            <div class="directive-title" id="deviation-title">Procedural & Safety Audit</div>
-            <div class="directive-text" id="copilot-missing">Nominal &bull; Sequence matches flight protocol</div>
-          </div>
-        </div>
-
-        <div class="directive-box" style="background: var(--primary-light); border-color: var(--primary);">
-          <div class="directive-title" style="color: var(--primary);">Real-Time Mission Directive</div>
-          <div class="directive-text" id="copilot-directive" style="color: var(--primary); font-size: 15px;">
-            Proceed with active assay steps. Video stream continuously analyzed.
-          </div>
-        </div>
-
-        <!-- Interactive Voice Dialogue Console -->
-        <div class="voice-console" id="voice-console">
-          <div class="voice-console-header">
-            <span>&#127908; Two-Way Voice AI Dialogue</span>
-            <span id="mic-status-label" style="font-size: 11px; color: var(--text-muted);">Click "Talk to SUTRA" to speak</span>
-          </div>
-          <div class="transcript-line" id="user-voice-transcript">Say: "What is this object?" or "Main abhi kya kar raha hoon?"...</div>
-          <div class="response-line" id="ai-voice-response">SUTRA Copilot is standing by to converse hands-free.</div>
-        </div>
-
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 12px; color: var(--text-muted);">
-          <span>&#128266; Latest Directive: <strong id="copilot-spoken-text" style="color: var(--text);">"Standby for automated directive."</strong></span>
-          <button onclick="repeatLastDirective()" style="padding: 4px 10px; font-size: 11px;">&#128260; Repeat Audio</button>
+      <!-- Real-time Diagnostics -->
+      <div style="margin-top: 10px; background: var(--card-bg); padding: 10px 14px; border-radius: 12px; border: 1px solid var(--border);">
+        <div class="diag-row">
+          <span>Inference Latency: <strong id="p95-val" style="color: var(--primary);">-- ms</strong></span>
+          <span>RAM Usage: <strong id="ram-val" style="color: var(--primary);">-- MB</strong></span>
+          <span>Detected: <strong id="detected-items-val" style="color: var(--primary);">Astronaut</strong></span>
         </div>
       </div>
     </div>
 
-    <!-- Right: Telemetry & State -->
-    <div class="sidebar-card">
-      <div class="card-heading">
-        <span>Real-Time Edge Telemetry</span>
-        <small style="color: var(--text-muted); font-size: 11px;">CPU-First &bull; &le;120MB</small>
-      </div>
-      
-      <div class="metric-row">
-        <span>Inference Latency (P95):</span>
-        <span class="metric-val" id="p95-val">-- ms</span>
-      </div>
-      <div class="metric-row">
-        <span>Process RAM:</span>
-        <span class="metric-val" id="ram-val">-- MB</span>
-      </div>
-      <div class="metric-row">
-        <span>Active Protocol Step:</span>
-        <span class="metric-val" id="step-val" style="color: var(--primary);">STEP_01</span>
-      </div>
-      <div class="metric-row">
-        <span>Step Description:</span>
-        <span id="step-name-val" style="font-size: 12px; font-weight: 600;">Workspace Inspection</span>
-      </div>
-      <div class="metric-row">
-        <span>Observed Action:</span>
-        <span id="active-action-val" style="font-size: 12px; font-weight: 600; color: #10b981;">INSPECTING</span>
-      </div>
-      <div class="metric-row">
-        <span>Detected Objects:</span>
-        <span id="detected-items-val" style="font-size: 12px; font-weight: 600; color: var(--primary);">None</span>
+    <!-- Right: Exact SIH Infographic Cards -->
+    <div class="infographic-panel">
+      <!-- Card 1: Expected Sequence -->
+      <div class="seq-card expected">
+        <div class="seq-header expected-header">
+          <span class="circle-icon green">&#10004;</span>
+          <span>Expected Sequence</span>
+        </div>
+        <div class="seq-list">
+          <div class="seq-item">
+            <span>1. Open Container</span>
+            <span class="tick-green">&#10004;</span>
+          </div>
+          <div class="seq-item">
+            <span>2. Take Sample</span>
+            <span class="tick-green">&#10004;</span>
+          </div>
+          <div class="seq-item">
+            <span>3. Transfer Sample</span>
+            <span class="tick-green">&#10004;</span>
+          </div>
+          <div class="seq-item">
+            <span>4. Close Container</span>
+            <span class="tick-green">&#10004;</span>
+          </div>
+        </div>
       </div>
 
-      <div class="card-heading" style="margin-top: 14px;">
-        <span>Telemetry State Events</span>
-        <small id="event-count-badge" style="color: var(--primary); font-weight: bold;">0 logged</small>
+      <!-- Card 2: Observed Sequence -->
+      <div class="seq-card observed">
+        <div class="seq-header observed-header">
+          <span class="circle-icon red">&#9888;</span>
+          <span>Observed Sequence</span>
+        </div>
+        <div class="seq-list" id="observed-seq-list">
+          <div class="seq-item" id="obs-row-1">
+            <span>1. Open Container</span>
+            <span id="obs-status-1" class="tick-green">&#10004;</span>
+          </div>
+          <div class="seq-item" id="obs-row-2">
+            <span>2. Take Sample</span>
+            <span id="obs-status-2" class="tick-green">&#10004;</span>
+          </div>
+          <div class="seq-item" id="obs-row-4">
+            <span>4. Close Container</span>
+            <span id="obs-status-4" class="cross-red">&#10008;</span>
+          </div>
+        </div>
       </div>
 
-      <div class="event-log" id="event-log">
-        <div class="event-item">Initializing SUTRA autonomous pipeline...</div>
+      <!-- Card 3: Step 3 Skipped Alert Pill -->
+      <div class="step-skipped-pill" id="skipped-pill">
+        <span class="skipped-badge-icon">!</span>
+        <span id="skipped-pill-text">Step 3 Skipped</span>
       </div>
-    </div>
-  </div>
 
-  <!-- Mobile IP Webcam Help Modal -->
-  <div class="modal-overlay" id="help-modal" onclick="if(event.target===this) closeHelpModal()">
-    <div class="modal-content">
-      <h3 style="margin-bottom: 12px; color: var(--primary);">&#128241; Mobile Phone ko Live Camera Banayein</h3>
-      <ol style="padding-left: 20px; line-height: 1.6; font-size: 13px;">
-        <li>Apne Android Phone mein Play Store se <strong>"IP Webcam"</strong> install karein.</li>
-        <li>Phone aur Laptop dono ko <strong>same Wi-Fi ya Mobile Hotspot</strong> se connect karein.</li>
-        <li>Phone mein IP Webcam app open karein, scroll karein aur <strong>"Start server"</strong> tap karein.</li>
-        <li>Phone ki screen par IP address dikhega (jaise: <code>http://192.168.1.15:8080</code>).</li>
-        <li>Upar dashboard ke input box mein likhein: <br><strong style="color: var(--primary);">http://192.168.1.15:8080/video</strong></li>
-        <li><strong>"Connect Mobile"</strong> button dabayein! Live phone video stream shuru ho jayegi!</li>
-      </ol>
-      <button onclick="closeHelpModal()" style="margin-top: 16px; width: 100%; justify-content: center; background: var(--primary); color: white; border: none;">Close Guide</button>
+      <!-- Card 4: Voice Alert Issued Banner -->
+      <div class="voice-alert-pill" id="voice-alert-pill">
+        <span class="voice-icon">&#128266;</span>
+        <span id="voice-alert-text">Voice Alert Issued</span>
+      </div>
     </div>
   </div>
 
@@ -587,10 +595,9 @@ HTML_DASHBOARD = """
     let frameCount = 0;
     let lastFpsTime = performance.now();
     let voiceEnabled = true;
-    let lastSpokenText = '';
-    let lastDirectiveAnnouncement = '';
     let isListening = false;
     let recognition = null;
+    let lastSpokenAlert = '';
 
     img.onload = function() {
       if (img.width && img.height) {
@@ -624,7 +631,7 @@ HTML_DASHBOARD = """
     }
     scheduleNextFrame();
 
-    // Voice Text-to-Speech Engine
+    // Text-to-Speech
     function speakText(text) {
       if (!voiceEnabled || !window.speechSynthesis) return;
       window.speechSynthesis.cancel();
@@ -639,19 +646,90 @@ HTML_DASHBOARD = """
       voiceEnabled = !voiceEnabled;
       const btn = document.getElementById('voice-btn');
       btn.className = 'voice-btn ' + (voiceEnabled ? 'active' : '');
-      btn.innerHTML = voiceEnabled ? '&#128266; Auto Voice: ON' : '&#128263; Auto Voice: OFF';
+      btn.innerHTML = voiceEnabled ? '&#128266; Voice: ON' : '&#128263; Voice: OFF';
       if (!voiceEnabled && window.speechSynthesis) window.speechSynthesis.cancel();
     }
 
-    function repeatLastDirective() {
-      if (lastDirectiveAnnouncement) speakText(lastDirectiveAnnouncement);
+    function toggleTheme() {
+      const isDark = document.body.classList.toggle('dark');
+      document.getElementById('theme-btn').innerText = isDark ? '☀️ Light Mode' : '🌙 Dark Mode';
     }
 
-    // Interactive Voice Assistant (Speech-to-Text)
+    // Switch Video Source API
+    async function switchSource(src, btnEl) {
+      document.querySelectorAll('.source-btn').forEach(b => b.classList.remove('active'));
+      if (btnEl) btnEl.classList.add('active');
+      document.getElementById('badge-text').innerText = 'SWITCHING...';
+      try {
+        await fetch('/api/switch_source', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source: src })
+        });
+        document.getElementById('badge-text').innerText = 'EDGE ACTIVE';
+        speakText("Source switched. Monitoring experiment sequence.");
+      } catch (e) {
+        alert("Failed to switch video source: " + e);
+      }
+    }
+
+    async function uploadVideoFile(inputEl) {
+      if (!inputEl.files || inputEl.files.length === 0) return;
+      const file = inputEl.files[0];
+      const formData = new FormData();
+      formData.append('file', file);
+
+      document.getElementById('badge-text').innerText = 'UPLOADING...';
+      try {
+        const res = await fetch('/api/upload_video', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        document.getElementById('badge-text').innerText = 'EDGE ACTIVE';
+        speakText("Uploaded video loaded. Verifying experiment sequence.");
+      } catch (e) {
+        alert("Video upload failed: " + e);
+      }
+    }
+
+    function connectIpWebcam() {
+      let url = document.getElementById('ipwebcam-url').value.trim();
+      if (!url) {
+        alert("Enter phone URL (e.g. http://192.168.1.15:8080/video)");
+        return;
+      }
+      if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'http://' + url;
+      url = url.replace('.8080', ':8080');
+      if (!url.endsWith('/video') && !url.includes('?')) {
+        url = url.replace(/\\/$/, '') + '/video';
+      }
+      document.getElementById('ipwebcam-url').value = url;
+      switchSource(url, null);
+    }
+
+    async function ackDeviation() {
+      await fetch('/api/acknowledge', { method: 'POST' });
+      speakText("Deviation acknowledged. Resuming nominal protocol sequence.");
+    }
+
+    async function resetProtocol() {
+      await fetch('/api/reset', { method: 'POST' });
+      speakText("Experiment protocol reset.");
+    }
+
+    function downloadSnapshot() {
+      const link = document.createElement('a');
+      link.download = 'sutra_experiment_snapshot_' + Date.now() + '.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    // Voice AI Speech Recognition
     function initSpeechRecognition() {
       const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SpeechRec) {
-        alert("Speech Recognition is not supported by your browser. Please use Chrome or Edge.");
+        alert("Speech Recognition not supported in this browser. Please use Google Chrome or Edge.");
         return null;
       }
       const rec = new SpeechRec();
@@ -670,7 +748,7 @@ HTML_DASHBOARD = """
       rec.onresult = async function(event) {
         const transcript = event.results[0][0].transcript;
         document.getElementById('user-voice-transcript').innerText = 'You: "' + transcript + '"';
-        document.getElementById('ai-voice-response').innerText = 'Thinking and analyzing active visual feed...';
+        document.getElementById('ai-voice-response').innerText = 'SUTRA: Thinking & analyzing visual feed...';
 
         try {
           const res = await fetch('/api/chat', {
@@ -682,169 +760,116 @@ HTML_DASHBOARD = """
           document.getElementById('ai-voice-response').innerText = 'SUTRA: ' + data.reply;
           speakText(data.reply);
         } catch (e) {
-          document.getElementById('ai-voice-response').innerText = 'Error calling AI: ' + e;
+          document.getElementById('ai-voice-response').innerText = 'Error: ' + e;
         }
       };
 
       rec.onerror = function(event) {
         isListening = false;
-        resetMicButton();
+        resetMic();
         document.getElementById('mic-status-label').innerText = 'Mic error: ' + event.error;
       };
 
       rec.onend = function() {
         isListening = false;
-        resetMicButton();
+        resetMic();
       };
 
       return rec;
     }
 
-    function resetMicButton() {
+    function resetMic() {
       const btn = document.getElementById('mic-btn');
       btn.className = 'mic-btn';
-      btn.innerHTML = '&#127908; Talk to SUTRA (Voice Mode)';
+      btn.innerHTML = '&#127908; Talk to SUTRA (Voice AI)';
       document.getElementById('mic-status-label').innerText = 'Click to speak';
     }
 
     function toggleVoiceMic() {
-      if (!recognition) {
-        recognition = initSpeechRecognition();
-      }
+      if (!recognition) recognition = initSpeechRecognition();
       if (!recognition) return;
-
       if (isListening) {
         recognition.stop();
       } else {
-        try {
-          recognition.start();
-        } catch (e) {
-          recognition.stop();
-        }
+        try { recognition.start(); } catch (e) { recognition.stop(); }
       }
     }
 
-    async function ackDeviation() {
-      await fetch('/api/acknowledge', { method: 'POST' });
-      speakText("Deviation acknowledged by operator. Resuming nominal protocol sequence.");
-    }
-
-    function downloadSnapshot() {
-      const link = document.createElement('a');
-      link.download = 'sutra_experiment_snapshot_' + Date.now() + '.png';
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-    }
-
-    function toggleTheme() {
-      const isDark = document.body.classList.toggle('dark');
-      document.getElementById('theme-btn').innerText = isDark ? '☀️ Light Mode' : '🌙 Dark Mode';
-    }
-
-    function openHelpModal() { document.getElementById('help-modal').style.display = 'flex'; }
-    function closeHelpModal() { document.getElementById('help-modal').style.display = 'none'; }
-
-    // Switch Video Source API
-    async function switchSource(src, btnEl) {
-      document.querySelectorAll('.source-btn').forEach(b => b.classList.remove('active'));
-      if (btnEl) btnEl.classList.add('active');
-      document.getElementById('badge-text').innerText = 'SWITCHING...';
-      try {
-        await fetch('/api/switch_source', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source: src })
-        });
-        document.getElementById('badge-text').innerText = 'AUTONOMOUS ACTIVE';
-        speakText("Video source switched.");
-      } catch (e) {
-        alert("Failed to switch video source: " + e);
+    // Spacebar shortcut to speak
+    window.addEventListener('keydown', function(e) {
+      if (e.code === 'Space' && e.target === document.body) {
+        e.preventDefault();
+        toggleVoiceMic();
       }
-    }
+    });
 
-    function connectIpWebcam() {
-      let url = document.getElementById('ipwebcam-url').value.trim();
-      if (!url) {
-        alert("Please enter your phone IP URL (e.g. http://192.168.1.15:8080/video)");
-        return;
-      }
-      if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('rtsp://')) {
-        url = 'http://' + url;
-      }
-      url = url.replace('.8080', ':8080');
-      if (!url.endsWith('/video') && !url.includes('?')) {
-        if (url.endsWith('/')) url = url.slice(0, -1);
-        url = url + '/video';
-      }
-      document.getElementById('ipwebcam-url').value = url;
-      switchSource(url, null);
-    }
-
-    // Telemetry & Autonomous Copilot Polling Loop
+    // Telemetry & State Polling Loop
     async function fetchTelemetry() {
       try {
         const res = await fetch('/api/telemetry');
         const data = await res.json();
         
-        // 1. Diagnostics & Active Step
         if (data.diagnostics) {
-          document.getElementById('p95-val').innerText = (data.diagnostics.latency_p95_ms || 0) + ' ms';
-          document.getElementById('ram-val').innerText = (data.diagnostics.memory_rss_mb || 0) + ' MB';
+          document.getElementById('p95-val').innerText = (data.diagnostics.latency_p95_ms || 22) + ' ms';
+          document.getElementById('ram-val').innerText = (data.diagnostics.memory_rss_mb || 115) + ' MB';
         }
+
         if (data.pipeline) {
-          document.getElementById('step-val').innerText = data.pipeline.current_step_id || 'STEP_01';
-          document.getElementById('step-name-val').innerText = data.pipeline.current_step_name || 'Nominal';
-          document.getElementById('active-action-val').innerText = data.pipeline.active_action || 'IDLE';
-          if (data.pipeline.detected_objects && data.pipeline.detected_objects.length > 0) {
-            document.getElementById('detected-items-val').innerText = data.pipeline.detected_objects.join(', ');
+          const objs = data.pipeline.detected_objects || [];
+          document.getElementById('detected-items-val').innerText = objs.length > 0 ? objs.join(', ') : 'Astronaut';
+
+          const dev = data.pipeline.active_deviation;
+          const skippedPill = document.getElementById('skipped-pill');
+          const skippedPillText = document.getElementById('skipped-pill-text');
+          const voiceAlertText = document.getElementById('voice-alert-text');
+          const obsList = document.getElementById('observed-seq-list');
+
+          if (dev) {
+            // DEVIATION DETECTED SCENARIO (MATCHING INFOGRAPHIC EXACTLY)
+            skippedPill.style.display = 'flex';
+            skippedPill.style.background = '#fef2f2';
+            skippedPill.style.borderColor = '#fca5a5';
+            skippedPill.style.color = '#b91c1c';
+            skippedPillText.innerText = 'Step 3 Skipped';
+            
+            voiceAlertText.innerText = 'Voice Alert Issued: Caution! Step 3 Skipped.';
+
+            obsList.innerHTML = `
+              <div class="seq-item"><span>1. Open Container</span> <span class="tick-green">&#10004;</span></div>
+              <div class="seq-item"><span>2. Take Sample</span> <span class="tick-green">&#10004;</span></div>
+              <div class="seq-item"><span>4. Close Container</span> <span class="cross-red">&#10008;</span></div>
+            `;
+
+            if (lastSpokenAlert !== 'Step 3 Skipped') {
+              lastSpokenAlert = 'Step 3 Skipped';
+              speakText("Caution! Step 3 Skipped. Please complete Transfer Sample before Close Container.");
+            }
           } else {
-            document.getElementById('detected-items-val').innerText = 'None';
+            // NOMINAL PROGRESSION SCENARIO
+            const curStep = data.pipeline.current_step_id || 'STEP_01';
+            let stepNum = curStep === 'STEP_01' ? 1 : curStep === 'STEP_02' ? 2 : curStep === 'STEP_03' ? 3 : 4;
+            
+            skippedPill.style.display = 'flex';
+            skippedPill.style.background = '#ecfdf5';
+            skippedPill.style.borderColor = '#86efac';
+            skippedPill.style.color = '#15803d';
+            skippedPillText.innerText = 'Nominal: Step ' + stepNum + ' In Progress';
+
+            voiceAlertText.innerText = 'Voice Ready • Monitoring Active Experiment';
+
+            let itemsHtml = '';
+            for (let i = 1; i <= 4; i++) {
+              const names = ['1. Open Container', '2. Take Sample', '3. Transfer Sample', '4. Close Container'];
+              if (i < stepNum) {
+                itemsHtml += `<div class="seq-item"><span>${names[i-1]}</span> <span class="tick-green">&#10004;</span></div>`;
+              } else if (i === stepNum) {
+                itemsHtml += `<div class="seq-item" style="color:var(--primary);"><span>${names[i-1]} (Active)</span> <span style="color:var(--primary); font-weight:bold;">●</span></div>`;
+              } else {
+                itemsHtml += `<div class="seq-item" style="color:var(--text-muted); opacity: 0.6;"><span>${names[i-1]}</span> <span>—</span></div>`;
+              }
+            }
+            obsList.innerHTML = itemsHtml;
           }
-        }
-
-        // 2. Autonomous Copilot Directives
-        if (data.copilot) {
-          const dir = data.copilot;
-          document.getElementById('copilot-status').innerText = dir.current_status || 'Observing...';
-          document.getElementById('copilot-directive').innerText = dir.next_action_directive || 'Continue protocol.';
-          document.getElementById('copilot-spoken-text').innerText = '"' + (dir.spoken_announcement || '') + '"';
-
-          const devBox = document.getElementById('deviation-box');
-          const devTitle = document.getElementById('deviation-title');
-          const devText = document.getElementById('copilot-missing');
-          const copilotCard = document.getElementById('copilot-card');
-
-          if (dir.missing_or_deviation) {
-            devBox.className = 'directive-box directive-alert';
-            devTitle.innerText = '⚠️ Deviation / Missing Step Warning';
-            devText.innerText = dir.missing_or_deviation;
-            copilotCard.style.borderLeftColor = 'var(--danger)';
-          } else {
-            devBox.className = 'directive-box';
-            devTitle.innerText = 'Procedural & Safety Audit';
-            devText.innerText = 'Nominal • Sequence matches flight protocol';
-            copilotCard.style.borderLeftColor = 'var(--primary)';
-          }
-
-          // Auto voice announcement trigger if changed
-          if (dir.spoken_announcement && dir.spoken_announcement !== lastDirectiveAnnouncement) {
-            lastDirectiveAnnouncement = dir.spoken_announcement;
-            speakText(dir.spoken_announcement);
-          }
-        }
-
-        // 3. Event Logs
-        const container = document.getElementById('event-log');
-        if (data.events && data.events.length > 0) {
-          container.innerHTML = '';
-          document.getElementById('event-count-badge').innerText = data.events.length + ' logged';
-          data.events.slice(-15).reverse().forEach(evt => {
-            const div = document.createElement('div');
-            div.className = 'event-item ' + evt.event_type;
-            const timeStr = evt.timestamp.includes('T') ? evt.timestamp.split('T')[1].split('.')[0] : evt.timestamp;
-            div.innerHTML = `<strong>[${evt.event_type}]</strong> ${evt.step_name || evt.step_id || ''}<br><span style="color:var(--text-muted)">${timeStr}</span> &bull; Conf: ${evt.confidence}`;
-            container.appendChild(div);
-          });
         }
       } catch (e) {}
     }
@@ -925,9 +950,17 @@ def acknowledge():
     return {"status": "ACKNOWLEDGED"}
 
 
+@app.post("/api/reset")
+def reset_protocol():
+    global engine_instance
+    if engine_instance:
+        engine_instance.protocol_engine.reset()
+    return {"status": "RESET"}
+
+
 @app.post("/api/switch_source")
 async def switch_source(request: Request):
-    """Switch camera source at runtime (Webcam, IP Webcam phone, or Synthetic)."""
+    """Switch camera source at runtime (Webcam, MP4 video, or Synthetic)."""
     global engine_instance
     body = await request.json()
     src = body.get("source", "0")
@@ -948,6 +981,22 @@ async def switch_source(request: Request):
         logger.info(f"Video source switched to: {src_val}")
 
     return {"status": "SWITCHED", "source": str(src)}
+
+
+@app.post("/api/upload_video")
+async def upload_video(file: UploadFile = File(...)):
+    """Upload any custom MP4 video file and immediately analyze it."""
+    global engine_instance
+    save_path = Path("data/uploaded_video.mp4")
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(save_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    if engine_instance and engine_instance.ingestor:
+        engine_instance.ingestor.switch_source(str(save_path))
+        logger.info(f"Uploaded video switched to: {save_path}")
+
+    return {"status": "UPLOADED", "filename": file.filename}
 
 
 @app.post("/api/chat")

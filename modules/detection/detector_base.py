@@ -7,14 +7,16 @@ from typing import Optional
 from pydantic import BaseModel, Field
 import numpy as np
 
-# Canonical lab classes for the SUTRA on-board experiment assistant
+# Canonical lab and astronaut classes for the SUTRA on-board experiment assistant
 MVP_CLASSES = [
     "hand",
     "vial_sealed",
     "vial_open",
     "pipette",
     "tip_box",
-    "waste_bin"
+    "waste_bin",
+    "astronaut",
+    "apparatus"
 ]
 
 
@@ -92,4 +94,3 @@ class BaseObjectDetector(ABC):
     def is_operational(self) -> bool:
         """Check if weights are loaded and the engine is ready for inference."""
         pass
-

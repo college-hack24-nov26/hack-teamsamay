@@ -32,7 +32,7 @@ class SutraConfig(BaseSettings):
         default=str(BASE_DIR / "models" / "yolo_sutra.onnx"),
         description="Path to custom ONNX weights"
     )
-    detection_conf_threshold: float = Field(default=0.45, description="Object detection threshold")
+    detection_conf_threshold: float = Field(default=0.20, description="Object detection threshold (0.20 for high webcam sensitivity)")
     pose_backend: str = Field(default="kinematic", description="'mediapipe' or 'kinematic'")
     
     # Protocol & Calibration

@@ -133,8 +133,18 @@ class UltralyticsYOLODetector(BaseObjectDetector):
             xyxy = box.xyxy[0].tolist()
             x1, y1, x2, y2 = xyxy
 
-            # Skip person class itself
+            # Emit person as astronaut detector
             if cls_name_raw == "person":
+                if conf >= 0.30:
+                    bbox = BoundingBox(x1=float(x1), y1=float(y1), x2=float(x2), y2=float(y2))
+                    detected_objects.append(DetectedObject(
+                        class_name="person",
+                        confidence=round(conf, 2),
+                        bbox=bbox,
+                        center=bbox.center,
+                        timestamp=timestamp,
+                        source_model="yolo:person"
+                    ))
                 continue
 
             # Check if object is inside face/head zone
