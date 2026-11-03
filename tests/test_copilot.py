@@ -43,3 +43,4 @@ def test_copilot_deterministic_rules():
     assert "Procedural violation" in dev_directive.current_status
     assert "STEP_02" in dev_directive.missing_or_deviation
     assert "Caution!" in dev_directive.spoken_announcement
+

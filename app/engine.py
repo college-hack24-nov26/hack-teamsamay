@@ -17,6 +17,7 @@ from app.config import SutraConfig
 from modules.ingestion.frame_buffer import LatestFrameBuffer, IngestedFrame
 from modules.ingestion.ingestor import FrameIngestor
 from modules.detection.detector_base import BaseObjectDetector, DetectedObject
+from modules.detection.yolo_detector import UltralyticsYOLODetector
 from modules.detection.onnx_detector import ONNXObjectDetector
 from modules.detection.heuristic_detector import HeuristicLabDetector
 from modules.pose.pose_base import BasePoseEstimator, HandPose
@@ -94,6 +95,13 @@ class SutraVisionEngine:
         self.ingestor = self._initialize_ingestor()
 
     def _initialize_detector(self) -> BaseObjectDetector:
+        # Priority 1: Real Deep Learning YOLOv8 Neural Network
+        yolo_det = UltralyticsYOLODetector(conf_threshold=self.config.detection_conf_threshold)
+        if yolo_det.is_operational():
+            logger.info("Using real Deep-Learning YOLOv8 Detector for lab apparatus.")
+            return yolo_det
+
+        # Priority 2: Custom ONNX Runtime Model
         onnx_det = ONNXObjectDetector(
             model_path=self.config.model_path,
             conf_threshold=self.config.detection_conf_threshold,
@@ -102,9 +110,10 @@ class SutraVisionEngine:
         if onnx_det.is_operational():
             logger.info(f"Using ONNX Runtime detector with model: {self.config.model_path}")
             return onnx_det
-        else:
-            logger.info("Using lightweight HeuristicLabDetector with face-suppression for lab items.")
-            return HeuristicLabDetector(min_confidence=self.config.detection_conf_threshold)
+
+        # Priority 3: Geometric apparatus filter
+        logger.info("Using lightweight HeuristicLabDetector for lab items.")
+        return HeuristicLabDetector(min_confidence=self.config.detection_conf_threshold)
 
     def _initialize_pose(self) -> BasePoseEstimator:
         # Priority 1: Real OpenCV Zoo MediaPipe ONNX Palm Detector
@@ -215,11 +224,8 @@ class SutraVisionEngine:
         tracked_objects = self.tracker.update(raw_detections, ts)
         hand_poses = self.pose_estimator.estimate(frame)
 
-        # Eliminate duplicate hand boxes: if hand_poses has hands, filter out generic "hand" objects
-        if hand_poses:
-            filtered_objects = [o for o in tracked_objects if o.class_name != "hand"]
-        else:
-            filtered_objects = tracked_objects
+        # Strictly filter out any generic "hand" objects (hands are handled exclusively by neural hand_poses)
+        filtered_objects = [o for o in tracked_objects if o.class_name != "hand"]
 
         # 2. Hand-Object Interaction (HOI)
         interactions = self.interaction_engine.evaluate(

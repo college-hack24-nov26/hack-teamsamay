@@ -10,6 +10,7 @@ from modules.detection.detector_base import BoundingBox, DetectedObject, MVP_CLA
 from modules.detection.heuristic_detector import HeuristicLabDetector
 from modules.detection.mock_detector import MockObjectDetector
 from modules.detection.onnx_detector import ONNXObjectDetector
+from modules.detection.yolo_detector import UltralyticsYOLODetector
 from scripts.generate_synthetic_video import render_scene
 
 
@@ -76,3 +77,13 @@ def test_onnx_detector_graceful_missing_weights():
     assert onnx_det.is_operational() is False
     assert onnx_det.detect(np.zeros((100, 100, 3), dtype=np.uint8), 0.0) == []
 
+
+
+def test_ultralytics_yolo_detector():
+    """Verify YOLOv8 deep learning detector loads and executes."""
+    yolo = UltralyticsYOLODetector()
+    assert yolo.is_operational() is True
+    assert "vial_sealed" in yolo.get_supported_classes()
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    dets = yolo.detect(frame, timestamp=1.0)
+    assert isinstance(dets, list)
