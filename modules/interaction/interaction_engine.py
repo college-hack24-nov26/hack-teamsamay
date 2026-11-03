@@ -116,13 +116,17 @@ class InteractionEngine:
                     # Pinch heuristic: if index and thumb tips are close, strong grasp indicator
                     is_pinching = hand.pinch_distance < 45.0
                     verb = "GRASPS"
-                    conf = min(0.95, (1.0 - (min_dist / self.grasp_distance_threshold)) * 0.4 + 0.55)
+                    ratio = min(1.0, min_dist / max(1e-5, self.grasp_distance_threshold))
+                    conf = max(0.10, min(0.95, (1.0 - ratio) * 0.4 + 0.55))
                     evidence["is_pinching"] = is_pinching
                 elif min_dist <= self.approach_distance_threshold:
                     verb = "APPROACHES"
-                    conf = max(0.50, 0.85 - (min_dist / self.approach_distance_threshold) * 0.35)
+                    ratio = min(1.0, min_dist / max(1e-5, self.approach_distance_threshold))
+                    conf = max(0.10, min(0.90, 0.85 - ratio * 0.35))
 
                 if verb is not None:
+                    # Ensure confidence is strictly clamped in [0.0, 1.0]
+                    clamped_conf = float(max(0.0, min(1.0, conf)))
                     key = (hand_label, obj.class_name, verb)
                     current_active_keys.add(key)
 
@@ -138,7 +142,7 @@ class InteractionEngine:
                         subject=hand_label,
                         verb=verb,
                         target=obj.class_name,
-                        confidence=round(conf, 3),
+                        confidence=round(clamped_conf, 3),
                         duration_seconds=round(max(0.0, duration), 2),
                         distance_norm=round(float(min_dist), 4),
                         evidence=evidence
@@ -179,4 +183,3 @@ class InteractionEngine:
                 del self._interaction_history[k]
 
         return relations
-

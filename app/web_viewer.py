@@ -266,19 +266,23 @@ def start_web_server(engine: SutraVisionEngine, host: str = "127.0.0.1", port: i
     def pipeline_worker():
         global latest_annotated_jpeg
         while True:
-            ingested = engine.frame_buffer.get_latest(timeout=0.5)
-            if ingested is None:
-                if not engine.ingestor.is_connected:
-                    time.sleep(0.2)
-                    continue
-                else:
-                    break
+            try:
+                ingested = engine.frame_buffer.get_latest(timeout=0.5)
+                if ingested is None:
+                    if not engine.ingestor.is_connected:
+                        time.sleep(0.2)
+                        continue
+                    else:
+                        break
 
-            res = engine.process_single_frame(ingested, annotate=True)
-            if res.annotated_frame is not None:
-                ret, buf = cv2.imencode(".jpg", res.annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                if ret:
-                    latest_annotated_jpeg = buf.tobytes()
+                res = engine.process_single_frame(ingested, annotate=True)
+                if res.annotated_frame is not None:
+                    ret, buf = cv2.imencode(".jpg", res.annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if ret:
+                        latest_annotated_jpeg = buf.tobytes()
+            except Exception as e:
+                logger.error(f"Error in pipeline worker: {e}")
+                time.sleep(0.05)
 
     t = threading.Thread(target=pipeline_worker, name="WebHUDWorker", daemon=True)
     t.start()
@@ -293,6 +297,5 @@ def start_web_server(engine: SutraVisionEngine, host: str = "127.0.0.1", port: i
 
 if __name__ == "__main__":
     conf = get_config()
-    # By default, use synthetic generator if video_source is 0 and no camera, or use camera 0
     engine = SutraVisionEngine(conf)
     start_web_server(engine, host="127.0.0.1", port=8000)
