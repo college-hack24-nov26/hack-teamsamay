@@ -30,7 +30,7 @@ steps:
       - subject: "Hand_R"
         verb: "GRASPS"
         target: "vial_sealed"
-    min_duration_seconds: 2.0
+    min_duration_seconds: 1.5
     max_duration_seconds: 60.0
     preconditions: ["STEP_01"]
     postconditions: ["VIAL_OPENED"]
@@ -48,7 +48,7 @@ steps:
       - subject: "Pipette"
         verb: "ENTERS"
         target: "vial_open"
-    min_duration_seconds: 2.5
+    min_duration_seconds: 1.5
     max_duration_seconds: 90.0
     preconditions: ["STEP_02"]
     postconditions: ["REAGENT_CHARGED"]
@@ -63,7 +63,7 @@ steps:
       - subject: "Pipette"
         verb: "ENTERS"
         target: "vial_open"
-    min_duration_seconds: 2.0
+    min_duration_seconds: 1.5
     max_duration_seconds: 90.0
     preconditions: ["STEP_03"]
     postconditions: ["DISPENSATION_VERIFIED"]
@@ -78,8 +78,7 @@ steps:
       - subject: "Hand_R"
         verb: "GRASPS"
         target: "vial_open"
-    min_duration_seconds: 2.0
+    min_duration_seconds: 1.5
     max_duration_seconds: 60.0
     preconditions: ["STEP_04"]
     postconditions: ["PROTOCOL_COMPLETE"]
-

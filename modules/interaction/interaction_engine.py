@@ -71,8 +71,8 @@ class InteractionEngine:
         relations: list[InteractionRelation] = []
         current_active_keys: set[tuple[str, str, str]] = set()
 
-        # Filter out "hand" objects from detections if detected separately
-        lab_objects = [obj for obj in objects if obj.class_name != "hand"]
+        # Filter out "hand" and "astronaut" from items that a hand grasps or operates
+        lab_objects = [obj for obj in objects if obj.class_name not in ["hand", "astronaut"]]
 
         for hand in hands:
             hand_label = f"Hand_{hand.handedness[0].upper()}"  # "Hand_R" or "Hand_L"

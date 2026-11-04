@@ -100,3 +100,40 @@ def test_checkpoint_save_and_restore():
     assert engine.current_step_idx == 2
     assert engine.step_statuses["STEP_02"] == StepStatus.COMPLETED
 
+
+
+def test_step_3_detection_and_progression():
+    """Verify that Step 2 smoothly transitions to Step 3 and Step 3 completes with tool/pipette."""
+    engine = ProtocolEngine(PROTOCOL_FILE)
+    box = BoundingBox(x1=10, y1=10, x2=50, y2=50)
+    astronaut_det = DetectedObject(class_name="astronaut", confidence=0.9, bbox=box, center=box.center, timestamp=1.0)
+    pipette_det = DetectedObject(class_name="pipette", confidence=0.88, bbox=box, center=box.center, timestamp=1.0)
+
+    # Fast-forward Step 1 and Step 2 to COMPLETED
+    engine.step_statuses["STEP_01"] = StepStatus.COMPLETED
+    engine.step_statuses["STEP_02"] = StepStatus.COMPLETED
+    engine.current_step_idx = 2  # STEP_03 (Reagent Aspiration)
+
+    temp_state = TemporalActivityState(
+        confirmed_activity="HOLDING_PIPETTE",
+        duration_active=0.5,
+        confidence=0.90
+    )
+
+    # 1. Step 3 starts
+    trigger, payload = engine.evaluate_step(temp_state, [], [astronaut_det, pipette_det], timestamp=1.0)
+    assert trigger == "STEP_STARTED"
+    assert payload["step_id"] == "STEP_03"
+    assert engine.step_statuses["STEP_03"] == StepStatus.IN_PROGRESS
+
+    # 2. Before min duration (elapsed = 0.5s < 1.5s): remains IN_PROGRESS
+    trigger2, _ = engine.evaluate_step(temp_state, [], [astronaut_det, pipette_det], timestamp=1.5)
+    assert trigger2 is None
+    assert engine.step_statuses["STEP_03"] == StepStatus.IN_PROGRESS
+
+    # 3. After min duration (elapsed = 2.0s >= 1.5s): completes and advances to STEP_04!
+    trigger3, payload3 = engine.evaluate_step(temp_state, [], [astronaut_det, pipette_det], timestamp=3.0)
+    assert trigger3 == "STEP_COMPLETED"
+    assert payload3["step_id"] == "STEP_03"
+    assert engine.step_statuses["STEP_03"] == StepStatus.COMPLETED
+    assert engine.current_step_idx == 3  # Successfully advanced to STEP_04

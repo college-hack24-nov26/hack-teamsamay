@@ -132,7 +132,11 @@ Output strictly valid JSON with these 4 keys (no markdown code blocks, just raw 
                 alert_level=data.get("alert_level", "INFO")
             )
         except Exception as e:
-            logger.error(f"Autonomous Groq reasoning error: {e}")
+            if "401" in str(e) or "invalid_api_key" in str(e).lower():
+                logger.warning("Groq API Key invalid or expired. Disabling Groq; switching to Onboard Edge FSM Copilot.")
+                self._groq_client = None
+            else:
+                logger.error(f"Autonomous Groq reasoning error: {e}")
             return None
 
     def _rule_based_copilot(self, ctx: dict) -> CopilotDirective:
@@ -208,4 +212,59 @@ Output strictly valid JSON with these 4 keys (no markdown code blocks, just raw 
                 spoken_announcement="Experiment completed successfully. All steps verified.",
                 alert_level="INFO"
             )
+
+    def generate_live_video_summary(self, ctx: dict) -> dict:
+        """
+        Generates a 3-4 line structured situational awareness analysis
+        of what is happening in the video stream in real-time.
+        """
+        astronaut_in_bay = "astronaut" in ctx.get("detected_objects", []) or ctx.get("hands_count", 0) > 0
+        tools = [o for o in ctx.get("detected_objects", []) if o in ["pipette", "tool", "forceps", "camera"]]
+        samples = [o for o in ctx.get("detected_objects", []) if o in ["vial_open", "vial_sealed", "sample"]]
+        apparatus = [o for o in ctx.get("detected_objects", []) if o in ["apparatus", "laptop", "cell phone"]]
+        action = ctx.get("active_action") or "MONITORING_WORKSPACE"
+        cur_step = ctx.get("current_step_name", "Workspace Inspection & Sanitization")
+        dev = ctx.get("active_deviation")
+
+        # Line 1: Operator & Spatial Presence
+        if astronaut_in_bay:
+            action_desc = action.replace("_", " ").title()
+            line1 = f"Operator Activity: Astronaut actively maneuvering in payload bay (Action: {action_desc})."
+        else:
+            line1 = "Operator Activity: Payload bay in standby; workstation clear & sterile."
+
+        # Line 2: Handheld & Equipment Interaction
+        if tools and samples:
+            line2 = "Handheld & Equipment: Transferring fluid/pipette with biological sample container engaged in grasp."
+        elif tools:
+            line2 = "Handheld & Equipment: Scientific instrument / imaging apparatus held in hand."
+        elif samples:
+            line2 = "Handheld & Equipment: Specimen container positioned in sterile rack boundary."
+        elif apparatus:
+            line2 = "Handheld & Equipment: Electronic test apparatus and payload bay racks monitored."
+        else:
+            line2 = "Handheld & Equipment: Empty hands / inspecting workbench for next scientific tool."
+
+        # Line 3: Protocol SOP & Deviation Status
+        if dev:
+            line3 = "SOP Compliance: ⚠ PROCEDURAL DEVIATION DETECTED — Step skipped or out-of-order! Voice warning dispatched."
+        else:
+            line3 = f"SOP Compliance: {cur_step} — Nominal flight execution (zero procedural errors)."
+
+        # Line 4: Immediate Mission Directive
+        if dev:
+            line4 = "AI Directive: Halt sequence! Complete missing step before proceeding."
+        elif cur_step and ("Finished" in cur_step or "Completed" in cur_step):
+            line4 = "AI Directive: Experiment complete. Store biological samples in thermal rack."
+        else:
+            line4 = f"AI Directive: Continue nominal protocol sequence for {cur_step}."
+
+        formatted_text = f"👨‍🚀 {line1}\n✋ {line2}\n📋 {line3}\n🚀 {line4}"
+        return {
+            "formatted_text": formatted_text,
+            "line1": line1,
+            "line2": line2,
+            "line3": line3,
+            "line4": line4
+        }
 

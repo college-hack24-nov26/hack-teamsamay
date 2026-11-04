@@ -16,7 +16,7 @@ import psutil
 from app.config import SutraConfig
 from modules.ingestion.frame_buffer import LatestFrameBuffer, IngestedFrame
 from modules.ingestion.ingestor import FrameIngestor
-from modules.detection.detector_base import BaseObjectDetector, DetectedObject
+from modules.detection.detector_base import BaseObjectDetector, DetectedObject, BoundingBox
 from modules.detection.yolo_detector import UltralyticsYOLODetector
 from modules.detection.onnx_detector import ONNXObjectDetector
 from modules.detection.heuristic_detector import HeuristicLabDetector
@@ -234,6 +234,34 @@ class SutraVisionEngine:
         # Strictly filter out any generic "hand" objects (hands are handled exclusively by neural hand_poses)
         filtered_objects = [o for o in tracked_objects if o.class_name != "hand"]
 
+        # Ensure tools / payloads grasped in hands (cameras, instruments, vials) are localized with Tool boxes
+        h_h, h_w = frame.shape[:2]
+        for hand in hand_poses:
+            px, py = hand.palm_center
+            has_obj = any(
+                (o.bbox.x1 <= px <= o.bbox.x2 and o.bbox.y1 <= py <= o.bbox.y2) or
+                np.hypot(o.center[0] - px, o.center[1] - py) < 85
+                for o in filtered_objects if o.class_name not in ["astronaut", "hand"]
+            )
+            if not has_obj and hand.confidence >= 0.50:
+                hw = (hand.bbox[2] - hand.bbox[0]) * 1.15
+                hh = (hand.bbox[3] - hand.bbox[1]) * 1.15
+                bx1 = max(0.0, min(float(h_w - 10), px - hw * 0.75))
+                by1 = max(0.0, min(float(h_h - 10), py - hh * 0.65))
+                bx2 = min(float(h_w), max(bx1 + 25, px + hw * 0.85))
+                by2 = min(float(h_h), max(by1 + 25, py + hh * 0.95))
+                
+                tool_bbox = BoundingBox(x1=bx1, y1=by1, x2=bx2, y2=by2)
+                from modules.detection.detector_base import DetectedObject as _DO
+                filtered_objects.append(_DO(
+                    class_name="pipette",  # Renders as Blue "Tool" box
+                    confidence=round(float(hand.confidence * 0.92), 2),
+                    bbox=tool_bbox,
+                    center=tool_bbox.center,
+                    timestamp=ts,
+                    source_model="hand_held_payload"
+                ))
+
         # 2. Hand-Object Interaction (HOI)
         interactions = self.interaction_engine.evaluate(
             hands=hand_poses,
@@ -349,15 +377,18 @@ class SutraVisionEngine:
             b = obj.bbox
             x1, y1, x2, y2 = int(b.x1), int(b.y1), int(b.x2), int(b.y2)
 
-            if obj.class_name == "person":
+            if obj.class_name in ["person", "astronaut"]:
                 display_label = "Astronaut"
                 color = (40, 185, 90)      # Green (BGR)
             elif obj.class_name in ["pipette", "tool", "forceps", "sampling_tool"]:
                 display_label = "Tool"
                 color = (235, 110, 35)     # Deep Blue (BGR)
-            else:
+            elif obj.class_name in ["vial_open", "vial_sealed", "sample"]:
                 display_label = "Sample"
                 color = (20, 145, 245)     # Amber/Orange (BGR)
+            else:
+                display_label = "Apparatus"
+                color = (180, 80, 210)     # Violet/Purple (BGR)
 
             # Solid 3px bounding box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)

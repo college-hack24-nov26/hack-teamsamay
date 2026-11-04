@@ -20,11 +20,13 @@ HAND_KEYPOINT_NAMES = [
 
 class HandKeypoint(BaseModel):
     """Normalized or pixel keypoint."""
-    id: int
-    name: str
+    id: int = 0
+    name: str = "wrist"
     x: float
     y: float
     z: float = 0.0
+    x_px: float = 0.0
+    y_px: float = 0.0
     confidence: float = 1.0
     visibility: float = 1.0
 
@@ -62,4 +64,3 @@ class BasePoseEstimator(ABC):
     def is_operational(self) -> bool:
         """Check if the pose engine is operational."""
         pass
-

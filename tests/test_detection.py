@@ -78,12 +78,14 @@ def test_onnx_detector_graceful_missing_weights():
     assert onnx_det.detect(np.zeros((100, 100, 3), dtype=np.uint8), 0.0) == []
 
 
-
 def test_ultralytics_yolo_detector():
     """Verify YOLOv8 deep learning detector loads and executes."""
     yolo = UltralyticsYOLODetector()
     assert yolo.is_operational() is True
     assert "vial_sealed" in yolo.get_supported_classes()
+    assert "astronaut" in yolo.get_supported_classes()
+    assert "apparatus" in yolo.get_supported_classes()
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     dets = yolo.detect(frame, timestamp=1.0)
     assert isinstance(dets, list)
+    assert len(dets) == 0  # Blank black frame should yield 0 false detections

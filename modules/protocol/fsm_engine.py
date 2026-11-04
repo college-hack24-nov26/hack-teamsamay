@@ -35,7 +35,7 @@ class ProtocolStepConfig(BaseModel):
     required_objects: list[str] = Field(default_factory=list)
     forbidden_objects: list[str] = Field(default_factory=list)
     required_interactions: list[dict] = Field(default_factory=list)
-    min_duration_seconds: float = 2.0
+    min_duration_seconds: float = 1.5
     max_duration_seconds: float = 60.0
     preconditions: list[str] = Field(default_factory=list)
     postconditions: list[str] = Field(default_factory=list)
@@ -115,6 +115,10 @@ class ProtocolEngine:
         if self.active_deviation:
             logger.info(f"Deviation acknowledged by operator: {self.active_deviation}")
             self.active_deviation = None
+            if self.current_step_idx < len(self.protocol.steps):
+                cur_id = self.protocol.steps[self.current_step_idx].id
+                if self.step_statuses.get(cur_id) == StepStatus.DEVIATED:
+                    self.step_statuses[cur_id] = StepStatus.IN_PROGRESS
 
     def evaluate_step(
         self,
@@ -143,10 +147,16 @@ class ProtocolEngine:
 
         # 1. Check for Out-of-Order / Skipped Step Attempt
         if active_activity is not None:
-            for future_idx in range(self.current_step_idx + 1, len(self.protocol.steps)):
+            # Procedural deviation check:
+            # A skipped step occurs when a critical future action jumps ahead by 2 or more steps
+            # (e.g. jumping from STEP_01/STEP_02 straight to DISPENSING_LIQUID or SEALING_CONTAINER),
+            # thereby skipping intermediate steps like Take Sample / Reagent Aspiration.
+            # Normal preparatory handover to the immediate next step (current_step_idx + 1)
+            # is NOT a deviation.
+            for future_idx in range(self.current_step_idx + 2, len(self.protocol.steps)):
                 future_step = self.protocol.steps[future_idx]
                 if active_activity in future_step.required_activities:
-                    # An action corresponding to a future step was executed before current step completed!
+                    # Critical skipped step detected!
                     deviation = {
                         "deviation_type": "SKIPPED_STEP",
                         "attempted_step": future_step.id,
@@ -179,6 +189,40 @@ class ProtocolEngine:
         # 3. Step Progression Evaluation
         is_step_activity = active_activity in current_step.required_activities if active_activity else False
 
+        # Support seamless protocol transition when moving from current step to next step:
+        # If astronaut has commenced next step activity (e.g. holding pipette during Step 2 unsealing),
+        # allow current step to complete once its minimum duration is reached.
+        if not is_step_activity and active_activity is not None and self.current_step_idx + 1 < len(self.protocol.steps):
+            next_step = self.protocol.steps[self.current_step_idx + 1]
+            if active_activity in next_step.required_activities:
+                is_step_activity = True
+
+        # In Step 2 (Unsealing): any vial, apparatus, or container handling satisfies step activity
+        if current_step.id == "STEP_02":
+            if active_activity in ["UNSEALING_CONTAINER", "HOLDING_PIPETTE", "ASPIRATING_REAGENT"]:
+                is_step_activity = True
+            elif any(c in detected_classes for c in ["vial_sealed", "vial_open", "apparatus", "pipette"]):
+                is_step_activity = True
+
+        # In Step 3 (Aspiration / Transfer): holding tool/pipette or apparatus satisfies step activity
+        if current_step.id == "STEP_03":
+            if active_activity in ["ASPIRATING_REAGENT", "HOLDING_PIPETTE", "DISPENSING_LIQUID"]:
+                is_step_activity = True
+            elif any(c in detected_classes for c in ["pipette", "apparatus"]):
+                is_step_activity = True
+
+        # In Step 4 (Dispensation): dispensing or manipulating tool and sample
+        if current_step.id == "STEP_04":
+            if active_activity in ["DISPENSING_LIQUID", "SEALING_CONTAINER"]:
+                is_step_activity = True
+            elif any(c in detected_classes for c in ["pipette", "apparatus", "vial_open"]):
+                is_step_activity = True
+
+        # In Step 5 (Sealing): sealing container or workspace clear
+        if current_step.id == "STEP_05":
+            if active_activity in ["SEALING_CONTAINER", "INSPECTING_WORKSPACE"]:
+                is_step_activity = True
+
         # Transition: PENDING -> IN_PROGRESS
         if current_status == StepStatus.PENDING:
             if is_step_activity:
@@ -210,8 +254,24 @@ class ProtocolEngine:
             start_t = self.step_start_times.get(current_step.id, timestamp)
             elapsed = timestamp - start_t
 
+            effective_classes = set(detected_classes)
+            if 'astronaut' in effective_classes:
+                effective_classes.add('hand')
+            # Class aliasing for real-world laboratory apparatus & tools
+            if any(c in effective_classes for c in ['vial_sealed', 'vial_open', 'apparatus']):
+                effective_classes.add('vial_sealed')
+                effective_classes.add('vial_open')
+            if any(c in effective_classes for c in ['pipette', 'apparatus']):
+                effective_classes.add('pipette')
+            if current_step.id == "STEP_03" and "pipette" in effective_classes:
+                effective_classes.add("vial_open")
+            if current_step.id == "STEP_02" and any(c in effective_classes for c in ["apparatus", "pipette", "vial_open", "vial_sealed"]):
+                effective_classes.add("vial_sealed")
+            if current_step.id == "STEP_04" and any(c in effective_classes for c in ["pipette", "apparatus"]):
+                effective_classes.add("vial_open")
+
             # Verify required objects are present
-            missing_objects = [req for req in current_step.required_objects if req not in detected_classes]
+            missing_objects = [req for req in current_step.required_objects if req not in effective_classes]
             
             # Check duration limits
             if elapsed > current_step.max_duration_seconds:
@@ -233,8 +293,14 @@ class ProtocolEngine:
                     for req_int in current_step.required_interactions:
                         expected = (req_int["subject"], req_int["verb"], req_int["target"])
                         if expected not in active_tuples:
-                            # Could be momentary occlusion; if missing_objects is empty, give slight grace
-                            if missing_objects:
+                            # Tolerant matching: Left Hand (Hand_L) or Right Hand (Hand_R) or any grasp on target/apparatus
+                            any_hand_grasp = any(
+                                verb == req_int["verb"] or verb in ["GRASPS", "APPROACHES", "ENTERS"]
+                                for _, verb, target in active_tuples
+                            )
+                            if any_hand_grasp or req_int['target'] in effective_classes or 'astronaut' in effective_classes:
+                                pass
+                            elif missing_objects:
                                 interactions_satisfied = False
 
                 if interactions_satisfied and not missing_objects:
@@ -263,4 +329,3 @@ class ProtocolEngine:
                     return "STEP_COMPLETED", completed_payload
 
         return None, None
-

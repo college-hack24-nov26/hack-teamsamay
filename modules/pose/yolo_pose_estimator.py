@@ -115,6 +115,7 @@ class YOLOPoseEstimator(BasePoseEstimator):
                 # Keypoint representations
                 landmarks = [
                     HandKeypoint(
+                        id=0,
                         name="wrist",
                         x=float(wx) / w,
                         y=float(wy) / h,
@@ -123,6 +124,7 @@ class YOLOPoseEstimator(BasePoseEstimator):
                         confidence=float(w_conf)
                     ),
                     HandKeypoint(
+                        id=1,
                         name="middle_mcp",
                         x=palm_x / w,
                         y=palm_y / h,
@@ -131,6 +133,7 @@ class YOLOPoseEstimator(BasePoseEstimator):
                         confidence=float(w_conf)
                     ),
                     HandKeypoint(
+                        id=2,
                         name="index_tip",
                         x=float(np.clip(palm_x + ux * 25.0, 0, w)) / w,
                         y=float(np.clip(palm_y + uy * 25.0, 0, h)) / h,
@@ -139,6 +142,7 @@ class YOLOPoseEstimator(BasePoseEstimator):
                         confidence=float(w_conf)
                     ),
                     HandKeypoint(
+                        id=3,
                         name="thumb_tip",
                         x=float(np.clip(palm_x - uy * 20.0, 0, w)) / w,
                         y=float(np.clip(palm_y + ux * 20.0, 0, h)) / h,

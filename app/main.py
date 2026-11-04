@@ -105,9 +105,9 @@ def main():
     parser.add_argument("--publish", action="store_true",
                         help="Enable HTTP telemetry publisher to mock receiver")
     parser.add_argument("--web", action="store_true",
-                        help="Launch interactive browser-based real-time video HUD (http://127.0.0.1:8000)")
-    parser.add_argument("--port", type=int, default=8000,
-                        help="Port for browser web HUD (default: 8000)")
+                        help="Launch interactive browser-based real-time video HUD (http://127.0.0.1:8081)")
+    parser.add_argument("--port", type=int, default=8081,
+                        help="Port for browser web HUD (default: 8081)")
     args = parser.parse_args()
 
     config = get_config()
@@ -123,9 +123,11 @@ def main():
         run_benchmark()
         return
 
-    # Web HUD Mode: opens real-time browser stream at http://127.0.0.1:8000
+    # Web HUD Mode: opens real-time browser stream at http://127.0.0.1:{args.port}
     if args.web:
         from app.web_viewer import start_web_server
+        if args.mode == "live" and not args.source:
+            config.video_source = "0"
         engine = SutraVisionEngine(config)
         if args.mode == "synthetic":
             from scripts.generate_synthetic_video import create_synthetic_frame_generator

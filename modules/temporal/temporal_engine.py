@@ -108,7 +108,7 @@ class DeterministicTemporalEngine:
         )
         self._history.append(snapshot)
 
-        # 1. Infer Instantaneous Frame Activity from Interactions
+        # 1. Infer Instantaneous Frame Activity from Interactions & Perceived Classes
         instant_action = self._infer_instantaneous_action(classes, inter_tuples)
 
         # 2. Occlusion Tolerance Check
@@ -120,28 +120,30 @@ class DeterministicTemporalEngine:
                 instant_action = self._confirmed_activity
                 is_occluded = True
 
-        # 3. Consensus & Debounce Logic
         if instant_action is not None and not is_occluded:
             self._last_valid_time = timestamp
 
-        if instant_action == self._current_candidate:
+        # 3. Consensus Debounce (Hysteresis)
+        if instant_action == self._current_candidate and instant_action is not None:
             self._consecutive_count += 1
         else:
             self._current_candidate = instant_action
-            self._consecutive_count = 1
+            self._consecutive_count = 1 if instant_action is not None else 0
             self._activity_start_time = timestamp
 
-        # 4. Confirmation Threshold
-        if self._consecutive_count >= self.consensus_threshold and self._current_candidate is not None:
+        # If consecutive consensus threshold is met, confirm the activity
+        if self._consecutive_count >= self.consensus_threshold:
             if self._confirmed_activity != self._current_candidate:
                 self._confirmed_activity = self._current_candidate
                 self._confirmed_start_time = self._activity_start_time
-        elif instant_action is None and not is_occluded and self._consecutive_count >= self.consensus_threshold:
+        elif instant_action is None and not is_occluded:
+            # If no activity detected for longer than occlusion grace, drop confirmed
             self._confirmed_activity = None
             self._confirmed_start_time = None
 
+        # Compute active duration
         duration_active = 0.0
-        if self._confirmed_activity and self._confirmed_start_time:
+        if self._confirmed_activity and self._confirmed_start_time is not None:
             duration_active = max(0.0, timestamp - self._confirmed_start_time)
 
         # Compute smoothed confidence
@@ -165,26 +167,29 @@ class DeterministicTemporalEngine:
         interactions: list[tuple[str, str, str]]
     ) -> Optional[str]:
         """
-        Maps low-level relational interactions to candidate experiment activities.
+        Maps low-level relational interactions and detected classes to candidate experiment activities.
+        Enables seamless live webcam execution without getting stuck in WAITING.
         """
-        # Step 3: Aspirating reagent
+        # Step 4: Dispensing liquid (both pipette/tool and vial in view or interacting)
+        if ("pipette" in classes and any(v in classes for v in ["vial_open", "vial_sealed"])) or \
+           any(target in ["vial_open", "vial_sealed"] and verb in ["ENTERS", "APPROACHES"] for _, verb, target in interactions):
+            return "DISPENSING_LIQUID"
+
+        # Step 3: Aspirating reagent / holding pipette
         if any(target in ["vial_open", "vial_sealed"] and verb == "ENTERS" for _, verb, target in interactions):
             return "ASPIRATING_REAGENT"
-        if any(target == "pipette" and verb == "GRASPS" for _, verb, target in interactions):
-            # If holding pipette near open vial
-            if "vial_open" in classes:
-                return "DISPENSING_LIQUID"
+        if "pipette" in classes or any(target == "pipette" and verb in ["GRASPS", "APPROACHES"] for _, verb, target in interactions):
             return "HOLDING_PIPETTE"
 
-        # Step 2: Unsealing vial
-        if any("vial" in target and verb == "GRASPS" for _, verb, target in interactions):
-            if "vial_open" in classes:
-                return "SEALING_CONTAINER"
+        # Step 2: Unsealing vial / container handling / apparatus interaction
+        if any(c in classes for c in ["vial_sealed", "apparatus"]) or \
+           any(target in ["vial_sealed", "vial_open", "apparatus"] and verb == "GRASPS" for _, verb, target in interactions):
             return "UNSEALING_CONTAINER"
+        if "vial_open" in classes:
+            return "SEALING_CONTAINER"
 
-        # Step 1: Workspace inspection
-        if "hand" in classes and not interactions:
+        # Step 1: Workspace inspection (Astronaut or hand present in payload bay)
+        if ("hand" in classes or "astronaut" in classes) and not interactions:
             return "INSPECTING_WORKSPACE"
 
         return None
-
